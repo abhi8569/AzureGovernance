@@ -1,0 +1,1 @@
+"""EAIP configuration module."""
