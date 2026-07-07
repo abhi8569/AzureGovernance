@@ -1,0 +1,1 @@
+"""EAIP orchestrator - pipeline coordination."""
