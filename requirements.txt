@@ -17,7 +17,19 @@ azure-mgmt-resource>=23.0.0
 azure-mgmt-managementgroups>=1.0.0
 azure-mgmt-keyvault>=10.3.0
 azure-mgmt-storage>=21.1.0
+azure-mgmt-sql>=3.0.0
+azure-mgmt-cosmosdb>=9.5.0
+azure-mgmt-network>=26.0.0
+azure-mgmt-analysisservices>=1.0.0
 azure-storage-file-datalake>=12.15.0
+
+# --- Azure Key Vault Data Plane -------------------------------------------
+azure-keyvault-keys>=4.9.0
+azure-keyvault-secrets>=4.8.0
+azure-keyvault-certificates>=4.8.0
+
+# --- Analysis Services (XMLA) ---------------------------------------------
+pyadomd>=0.3.0
 
 # --- Database & Analytics -------------------------------------------------
 duckdb>=1.0.0
