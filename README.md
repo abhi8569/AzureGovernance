@@ -89,8 +89,29 @@ EAIP_AAS_SERVERS=["powerbi://api.powerbi.com/v1.0/myorg/MyWorkspace"]
 
 ### 3. Run
 
+#### 🚀 Subscription Scan (Recommended — easiest way to start)
+
+Just provide your subscription ID(s) and EAIP auto-discovers all resources and extracts everything:
+
 ```bash
-# Full pipeline: Extract all permissions → Transform → Compute effective access → Export
+# Scan a single subscription — discovers SQL, Key Vault, Storage, Cosmos, NSGs, etc.
+python -m src.orchestrator.pipeline --scan-subscription --subscription-ids YOUR-SUB-GUID
+
+# Scan multiple subscriptions at once
+python -m src.orchestrator.pipeline --scan-subscription --subscription-ids SUB-1 SUB-2 SUB-3
+```
+
+This mode:
+1. Queries **Azure Resource Graph** to discover every resource in the subscription
+2. Matches discovered resources to extractors (SQL → SQL deep extractor, Key Vault → KV extractor, etc.)
+3. Runs **Entra ID, Azure RBAC, Fabric/PBI, SharePoint, Teams, AAS** automatically
+4. Computes transitive closures and effective permissions
+5. Exports to DuckDB + Parquet
+
+#### Other Run Modes
+
+```bash
+# Full pipeline (uses all configured sources — same as scan but reads from .env)
 python -m src.orchestrator.pipeline --full
 
 # Extract only (no ETL processing)
@@ -148,6 +169,7 @@ All settings are set via environment variables with the `EAIP_` prefix, or in a 
 | `EAIP_EXTRACT_TEAMS` | bool | `true` | Enable Teams extraction |
 | `EAIP_EXTRACT_NETWORKING` | bool | `true` | Enable networking (NSG/PE) extraction |
 | `EAIP_EXTRACT_COSMOSDB` | bool | `true` | Enable Cosmos DB extraction |
+| `EAIP_SUBSCRIPTION_IDS` | list | `[]` | Subscription GUIDs for `--scan-subscription` (also configurable via CLI) |
 
 ---
 

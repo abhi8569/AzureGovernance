@@ -103,6 +103,13 @@ class EAIPSettings(BaseSettings):
         default=True,
         description="Enable or disable the Cosmos DB extractor.",
     )
+    subscription_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of Azure subscription GUIDs to scan. "
+            "Used by --scan-subscription mode. Can also be passed via CLI."
+        ),
+    )
 
     model_config = {
         "env_prefix": "EAIP_",

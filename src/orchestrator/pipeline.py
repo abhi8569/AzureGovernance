@@ -164,6 +164,101 @@ class Pipeline:
         finally:
             session.close()
 
+    async def run_subscription_scan(self, subscription_ids: list[str]) -> dict[str, Any]:
+        """Scan subscriptions: auto-discover all resources and extract permissions.
+
+        This is the "just give me a subscription" mode. The scanner:
+        1. Queries Azure Resource Graph for ALL resources in the subscriptions
+        2. Groups them by ARM resource type
+        3. Automatically invokes matching deep extractors (SQL, KV, Cosmos, Storage, etc.)
+        4. Also runs Entra ID, RBAC, Fabric/PBI, SharePoint, Teams, AAS
+
+        Args:
+            subscription_ids: One or more Azure subscription GUIDs.
+
+        Returns:
+            Summary dict with extraction counts, discovered types, and timing.
+        """
+        start_time = time.monotonic()
+        summary: dict[str, Any] = {
+            "started_at": datetime.utcnow().isoformat(),
+            "mode": "subscription_scan",
+            "subscription_ids": subscription_ids,
+        }
+
+        # Initialize database schema
+        self.db.initialize_schema()
+
+        # Create snapshot
+        session = self.db.get_session()
+        try:
+            snapshot_id = SnapshotManager.create_snapshot(
+                session,
+                description=f"Subscription scan {', '.join(subscription_ids[:3])} {date.today()}",
+            )
+            summary["snapshot_id"] = snapshot_id
+
+            # Build auth clients
+            msal_client = MSALClient(
+                tenant_id=self.settings.tenant_id,
+                client_id=self.settings.client_id,
+                client_secret=self.settings.client_secret.get_secret_value(),
+            )
+            credential = get_credential(self.settings)
+
+            # Run the subscription scanner
+            from src.orchestrator.subscription_scanner import SubscriptionScanner
+            scanner = SubscriptionScanner(
+                credential=credential,
+                msal_client=msal_client,
+                tenant_id=self.settings.tenant_id,
+                snapshot_id=snapshot_id,
+                settings=self.settings,
+            )
+            scan_results = await scanner.scan(subscription_ids)
+            summary["extraction"] = scan_results
+
+            # Load extracted data
+            load_results = self._load_to_database(session, scan_results, snapshot_id)
+            summary["loading"] = load_results
+
+            # Compute closures
+            membership_edges = ClosureComputer.compute_membership_closure(session, snapshot_id)
+            resource_edges = ClosureComputer.compute_resource_hierarchy_closure(session, snapshot_id)
+            summary["closures"] = {
+                "membership_edges": membership_edges,
+                "resource_edges": resource_edges,
+            }
+
+            # Effective permissions + access paths
+            summary["effective_permissions"] = EffectivePermissionResolver.resolve(session, snapshot_id)
+            summary["access_paths"] = AccessPathBuilder.build_paths(session, snapshot_id)
+
+            # Validate
+            summary["validation"] = DataValidator.generate_report(session, snapshot_id)
+
+            # Export to Parquet
+            self._export_to_parquet(snapshot_id)
+            summary["parquet_exported"] = True
+
+        except Exception as e:
+            logger.error("subscription_scan_failed", error=str(e))
+            summary["error"] = str(e)
+            raise
+        finally:
+            session.close()
+
+        duration = time.monotonic() - start_time
+        summary["duration_seconds"] = round(duration, 2)
+        summary["completed_at"] = datetime.utcnow().isoformat()
+
+        logger.info(
+            "subscription_scan_complete",
+            duration=summary["duration_seconds"],
+            subscriptions=subscription_ids,
+        )
+        return summary
+
     async def _run_extraction(self, snapshot_id: int) -> dict[str, Any]:
         """Run all extractors (surface + deep) and return results.
 
@@ -515,19 +610,52 @@ class Pipeline:
 def main() -> None:
     """CLI entry point for the EAIP pipeline."""
     parser = argparse.ArgumentParser(
-        description="EAIP - Enterprise Access Intelligence Platform Pipeline"
+        description="EAIP - Enterprise Access Intelligence Platform Pipeline",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+examples:
+  # Full pipeline (all configured sources)
+  python -m src.orchestrator.pipeline --full
+
+  # Scan a single subscription (auto-discovers all resources)
+  python -m src.orchestrator.pipeline --scan-subscription --subscription-ids abc-123
+
+  # Scan multiple subscriptions
+  python -m src.orchestrator.pipeline --scan-subscription --subscription-ids abc-123 def-456
+
+  # Extract only (no ETL)
+  python -m src.orchestrator.pipeline --extract-only
+
+  # ETL only on existing data
+  python -m src.orchestrator.pipeline --etl-only --snapshot-id 42
+""",
+    )
+
+    mode_group = parser.add_mutually_exclusive_group(required=True)
+    mode_group.add_argument(
+        "--full", action="store_true",
+        help="Run the full pipeline (extract + ETL) using all configured sources",
+    )
+    mode_group.add_argument(
+        "--scan-subscription", action="store_true",
+        help="Auto-discover and extract all resources in the given subscription(s)",
+    )
+    mode_group.add_argument(
+        "--extract-only", action="store_true",
+        help="Run extraction only (no ETL processing)",
+    )
+    mode_group.add_argument(
+        "--etl-only", action="store_true",
+        help="Run ETL only on latest or specified snapshot",
+    )
+
+    parser.add_argument(
+        "--subscription-ids", nargs="+", metavar="SUB_ID",
+        help="One or more Azure subscription GUIDs (required for --scan-subscription)",
     )
     parser.add_argument(
-        "--full", action="store_true", help="Run the full pipeline (extract + ETL)"
-    )
-    parser.add_argument(
-        "--extract-only", action="store_true", help="Run extraction only"
-    )
-    parser.add_argument(
-        "--etl-only", action="store_true", help="Run ETL only on latest snapshot"
-    )
-    parser.add_argument(
-        "--snapshot-id", type=int, help="Snapshot ID for ETL-only mode"
+        "--snapshot-id", type=int,
+        help="Snapshot ID for --etl-only mode",
     )
 
     args = parser.parse_args()
@@ -535,6 +663,14 @@ def main() -> None:
 
     if args.full:
         result = asyncio.run(pipeline.run_full())
+    elif args.scan_subscription:
+        sub_ids = args.subscription_ids or pipeline.settings.subscription_ids
+        if not sub_ids:
+            parser.error(
+                "--scan-subscription requires --subscription-ids SUB_ID [SUB_ID ...] "
+                "or EAIP_SUBSCRIPTION_IDS set in .env"
+            )
+        result = asyncio.run(pipeline.run_subscription_scan(sub_ids))
     elif args.extract_only:
         result = asyncio.run(pipeline.run_extract_only())
     elif args.etl_only:
