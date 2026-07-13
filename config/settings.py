@@ -29,6 +29,12 @@ class EAIPSettings(BaseSettings):
             Capped at 999 for Microsoft Graph batch limits.
         devops_org: Azure DevOps organisation name.
         devops_pat: Azure DevOps personal access token.
+        sql_connections: List of pyodbc connection strings for SQL extraction.
+        aas_servers: List of AAS/PBI XMLA endpoint URLs.
+        extract_sharepoint: Enable or disable the SharePoint extractor.
+        extract_teams: Enable or disable the Teams extractor.
+        extract_networking: Enable or disable the networking extractor.
+        extract_cosmosdb: Enable or disable the Cosmos DB extractor.
     """
 
     tenant_id: str = Field(
@@ -72,6 +78,30 @@ class EAIPSettings(BaseSettings):
     devops_pat: SecretStr = Field(
         default=SecretStr(""),
         description="Azure DevOps personal access token.",
+    )
+    sql_connections: list[str] = Field(
+        default_factory=list,
+        description="List of pyodbc connection strings for SQL-based extraction.",
+    )
+    aas_servers: list[str] = Field(
+        default_factory=list,
+        description="List of AAS/PBI XMLA endpoint URLs.",
+    )
+    extract_sharepoint: bool = Field(
+        default=True,
+        description="Enable or disable the SharePoint extractor.",
+    )
+    extract_teams: bool = Field(
+        default=True,
+        description="Enable or disable the Teams extractor.",
+    )
+    extract_networking: bool = Field(
+        default=True,
+        description="Enable or disable the networking extractor.",
+    )
+    extract_cosmosdb: bool = Field(
+        default=True,
+        description="Enable or disable the Cosmos DB extractor.",
     )
 
     model_config = {

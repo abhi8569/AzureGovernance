@@ -48,3 +48,23 @@ SHAREPOINT_SCOPES: Final[list[str]] = [
     "https://microsoft.sharepoint-df.com/.default",
 ]
 """SharePoint Online REST API scopes for site and list queries."""
+
+TEAMS_SCOPES: Final[list[str]] = [
+    "https://graph.microsoft.com/.default",
+]
+"""Microsoft Teams scopes (via Graph API) for team and channel queries."""
+
+KEY_VAULT_SCOPES: Final[list[str]] = [
+    "https://vault.azure.net/.default",
+]
+"""Azure Key Vault scopes for secret, key, and certificate access policies."""
+
+AAS_SCOPES: Final[list[str]] = [
+    "https://analysis.windows.net/powerbi/api/.default",
+]
+"""Azure Analysis Services / Power BI XMLA endpoint scopes."""
+
+COSMOS_SCOPES: Final[list[str]] = [
+    "https://cosmos.azure.com/.default",
+]
+"""Azure Cosmos DB data-plane scopes for RBAC and policy queries."""

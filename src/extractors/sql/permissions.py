@@ -133,7 +133,7 @@ FROM sys.dm_database_encryption_keys dek
 JOIN sys.databases db ON dek.database_id = db.database_id
 """
 
-QUERY_SERVER_LOGINS = """
+QUERY_SERVER_LOGINS = r"""
 SELECT
     sp.principal_id,
     sp.name AS login_name,

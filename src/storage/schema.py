@@ -231,3 +231,101 @@ class FactAccessPath(Base):
     node_type = Column(String(50))
     node_name = Column(String(256))
     snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+
+
+class FactRLSPolicy(Base):
+    """Row-Level Security policies extracted from SQL databases."""
+    __tablename__ = "fact_rls_policy"
+
+    rls_id = Column(BigInteger, primary_key=True)
+    resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
+    database = Column(String(256), nullable=False)
+    policy_name = Column(String(256), nullable=False)
+    is_enabled = Column(Boolean)
+    target_table = Column(String(256))
+    predicate_type = Column(String(50))
+    predicate_definition = Column(Text)
+    filter_function_name = Column(String(256))
+    filter_function_definition = Column(Text)
+    role_name = Column(String(256))
+    model_permission = Column(String(50))
+    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+
+
+class FactDDMRule(Base):
+    """Dynamic Data Masking rules extracted from SQL databases."""
+    __tablename__ = "fact_ddm_rule"
+
+    ddm_id = Column(BigInteger, primary_key=True)
+    resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
+    database = Column(String(256), nullable=False)
+    table_name = Column(String(256), nullable=False)
+    column_name = Column(String(256), nullable=False)
+    masking_function = Column(String(256))
+    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+
+
+class FactSharingLink(Base):
+    """SharePoint / OneDrive sharing links."""
+    __tablename__ = "fact_sharing_link"
+
+    link_id = Column(BigInteger, primary_key=True)
+    item_name = Column(String(256))
+    drive_id = Column(String(256))
+    item_id = Column(String(256))
+    link_type = Column(String(50))
+    link_scope = Column(String(50))
+    link_url = Column(Text)
+    created_by = Column(Text)
+    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+
+
+class FactNSGRule(Base):
+    """Network Security Group rules."""
+    __tablename__ = "fact_nsg_rule"
+
+    rule_id = Column(BigInteger, primary_key=True)
+    nsg_resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
+    nsg_name = Column(String(256))
+    rule_name = Column(String(256), nullable=False)
+    priority = Column(Integer)
+    direction = Column(String(20))
+    access = Column(String(20))
+    protocol = Column(String(20))
+    source_address = Column(String(256))
+    source_port = Column(String(256))
+    destination_address = Column(String(256))
+    destination_port = Column(String(256))
+    description = Column(String(512))
+    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+
+
+class FactPrivateEndpoint(Base):
+    """Azure Private Endpoint connections."""
+    __tablename__ = "fact_private_endpoint"
+
+    pe_id = Column(BigInteger, primary_key=True)
+    resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
+    name = Column(String(256))
+    location = Column(String(50))
+    subnet_id = Column(String(256))
+    target_resource = Column(Text)
+    group_ids = Column(Text)
+    connection_status = Column(String(50))
+    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+
+
+class FactOneLakeRole(Base):
+    """OneLake workspace-level role assignments."""
+    __tablename__ = "fact_onelake_role"
+
+    onelake_role_id = Column(BigInteger, primary_key=True)
+    workspace_id = Column(String(256))
+    item_id = Column(String(256))
+    item_type = Column(String(100))
+    item_name = Column(String(256))
+    role_name = Column(String(256))
+    role_definition_id = Column(String(256))
+    decision_rules = Column(Text)
+    members = Column(Text)
+    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
