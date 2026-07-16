@@ -4,7 +4,7 @@ from __future__ import annotations
 import msal
 import structlog
 
-from auth.token_cache import DEFAULT_CACHE_PATH, load_cache, save_cache
+from src.auth.token_cache import DEFAULT_CACHE_PATH, load_cache, save_cache
 
 logger = structlog.get_logger(__name__)
 

@@ -52,3 +52,4 @@ echo  Activate the venv:   .venv\Scripts\activate
 echo  Run tests:           python -m pytest tests/ -v
 echo  Run scan:            python -m src.orchestrator.pipeline --scan-subscription --subscription-ids YOUR-SUB-ID
 echo.
+pause
