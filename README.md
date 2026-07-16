@@ -54,14 +54,24 @@ It answers the question: **"Who has access to this resource, and why?"**
 
 ```bash
 # Clone the repository
-git clone <repo-url> && cd MicrosoftGovernance
+git clone https://github.com/abhi8569/AzureGovernance.git && cd AzureGovernance
 
-# Option A: Install with pip (recommended)
+# Option A: One-command setup (creates venv + installs deps + copies .env)
+setup.bat                   # Windows
+# bash setup.sh             # Linux / macOS / Git Bash
+
+# Option B: Manual setup
+python -m venv .venv
+.venv\Scripts\activate      # Windows
+# source .venv/bin/activate # Linux / macOS
 pip install -r requirements.txt
-
-# Option B: Install in editable mode with dev tools
-pip install -e ".[dev]"
+cp .env.example .env
 ```
+
+> **Important:** Always activate the venv before running EAIP:
+> - Windows: `.venv\Scripts\activate`
+> - Linux/macOS: `source .venv/bin/activate`
+
 
 ### 2. Configure
 
