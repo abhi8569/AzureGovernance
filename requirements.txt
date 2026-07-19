@@ -48,8 +48,11 @@ pydantic-settings>=2.3.0
 # --- Logging --------------------------------------------------------------
 structlog>=24.1.0
 
-# --- ODBC (SQL Server) — optional, requires ODBC Driver 18 ----------------
-# pyodbc>=5.1.0  # Install manually: pip install pyodbc
+# --- SQL Server (pure Python — no ODBC driver needed) ---------------------
+mssql-python>=0.5.0
+
+# --- ODBC (optional fallback — only if you prefer pyodbc) -----------------
+# pyodbc>=5.1.0  # Requires ODBC Driver 18 installed at OS level
 
 # --- Dev / Test -----------------------------------------------------------
 pytest>=8.2.0

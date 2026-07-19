@@ -35,14 +35,10 @@ logger = structlog.get_logger(__name__)
 #   - scope: "subscription" (once per sub) or "resource" (per instance)
 #   - needs_token: "arm" | "graph" | "fabric" | None
 RESOURCE_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
-    # --- SQL Server ---
-    "microsoft.sql/servers": {
-        "label": "SQL Server",
-        "extractor_module": "src.extractors.sql.permissions",
-        "extractor_class": "SQLServerExtractor",
-        "scope": "subscription",
-        "mode": "arm",
-    },
+    # NOTE: SQL Server is NOT here — it has its own dedicated deep extraction
+    # step in scan() that discovers servers, lists databases, and deep-extracts
+    # each one via T-SQL with Azure AD token auth.
+
     # --- Cosmos DB ---
     "microsoft.documentdb/databaseaccounts": {
         "label": "Cosmos DB",
@@ -151,22 +147,29 @@ class SubscriptionScanner:
         await self._extract_azure_rbac(subscription_ids, results)
 
         # ─────────────────────────────────────────────
-        # Step 4: Auto-extract discovered resource types
+        # Step 4: SQL Server deep extraction (mandatory — not optional)
+        #   Auto-discovers SQL servers in each subscription,
+        #   lists databases via ARM, then T-SQL deep-extracts each.
+        # ─────────────────────────────────────────────
+        await self._extract_sql_deep(subscription_ids, results)
+
+        # ─────────────────────────────────────────────
+        # Step 5: Auto-extract other discovered resource types
         # ─────────────────────────────────────────────
         await self._extract_discovered_resources(subscription_ids, discovered_types, results)
 
         # ─────────────────────────────────────────────
-        # Step 5: Extract Fabric / Power BI (tenant-wide, not sub-scoped)
+        # Step 6: Extract Fabric / Power BI (tenant-wide, not sub-scoped)
         # ─────────────────────────────────────────────
         await self._extract_fabric(results)
 
         # ─────────────────────────────────────────────
-        # Step 6: Extract SharePoint + Teams (tenant-wide via Graph)
+        # Step 7: Extract SharePoint + Teams (tenant-wide via Graph)
         # ─────────────────────────────────────────────
         await self._extract_sharepoint_teams(results)
 
         # ─────────────────────────────────────────────
-        # Step 7: Extract Analysis Services (if configured)
+        # Step 8: Extract Analysis Services (if configured)
         # ─────────────────────────────────────────────
         await self._extract_aas(results)
 
@@ -252,6 +255,57 @@ class SubscriptionScanner:
             k: v for k, v in sorted(discovered.items(), key=lambda x: -x[1])
         }
         return discovered
+
+    # ─────────────────────────────────────────────────────────────
+    # Internal: SQL Server Deep Extraction (mandatory)
+    # ─────────────────────────────────────────────────────────────
+
+    async def _extract_sql_deep(
+        self,
+        subscription_ids: list[str],
+        results: dict[str, Any],
+    ) -> None:
+        """Discover SQL servers and deep-extract permissions from every database.
+
+        This is NOT optional — if SQL servers exist in the subscription,
+        they are automatically deep-extracted (users, roles, RLS, DDM, etc.).
+
+        Uses mssql-python (pure Python, no ODBC driver) for data-plane access.
+        """
+        from src.extractors.sql.connection import SQL_TOKEN_SCOPE
+
+        try:
+            # Get a SQL data-plane token for T-SQL queries
+            sql_token = self.msal_client.get_token([SQL_TOKEN_SCOPE])
+
+            from src.extractors.sql.permissions import SQLServerExtractor
+            sql_ext = SQLServerExtractor(self.tenant_id, self.snapshot_id)
+
+            for sub_id in subscription_ids:
+                try:
+                    sql_result = sql_ext.extract_subscription(
+                        credential=self.credential,
+                        subscription_id=sub_id,
+                        access_token=sql_token,
+                    )
+                    results.setdefault("sql_deep", {"count": 0, "errors": []})
+                    results["sql_deep"]["count"] += sql_result.record_count
+                    results["sql_deep"]["errors"].extend(sql_result.errors)
+
+                    logger.info(
+                        "sql_deep_extracted",
+                        subscription=sub_id,
+                        records=sql_result.record_count,
+                        errors=len(sql_result.errors),
+                    )
+                except Exception as e:
+                    results.setdefault("sql_deep", {"count": 0, "errors": []})
+                    results["sql_deep"]["errors"].append(f"{sub_id}: {e}")
+                    logger.warning("sql_deep_failed", subscription=sub_id, error=str(e))
+
+        except Exception as e:
+            results["sql_deep"] = {"error": str(e)}
+            logger.error("sql_token_acquisition_failed", error=str(e))
 
     # ─────────────────────────────────────────────────────────────
     # Internal: Entra ID

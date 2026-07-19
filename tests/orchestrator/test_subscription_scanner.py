@@ -14,9 +14,12 @@ from src.orchestrator.subscription_scanner import (
 class TestResourceTypeRegistry:
     """Tests for the RESOURCE_TYPE_REGISTRY mapping."""
 
-    def test_sql_registered(self) -> None:
-        assert "microsoft.sql/servers" in RESOURCE_TYPE_REGISTRY
-        assert RESOURCE_TYPE_REGISTRY["microsoft.sql/servers"]["label"] == "SQL Server"
+    def test_sql_not_in_registry_has_dedicated_step(self) -> None:
+        """SQL is extracted via its own dedicated step, not the generic registry."""
+        assert "microsoft.sql/servers" not in RESOURCE_TYPE_REGISTRY
+        # Verify the dedicated SQL extractor exists
+        from src.extractors.sql.permissions import SQLServerExtractor
+        assert hasattr(SQLServerExtractor, "extract_subscription")
 
     def test_cosmosdb_registered(self) -> None:
         assert "microsoft.documentdb/databaseaccounts" in RESOURCE_TYPE_REGISTRY
@@ -72,7 +75,8 @@ class TestDiscoveryMatching:
             "microsoft.web/sites": 4,
         }
         matched = [t for t in discovered if t.lower() in RESOURCE_TYPE_REGISTRY]
-        assert "microsoft.sql/servers" in matched
+        # SQL has its own dedicated step, so it should NOT be in registry matches
+        assert "microsoft.sql/servers" not in matched
         assert "microsoft.keyvault/vaults" in matched
         assert "microsoft.storage/storageaccounts" in matched
         assert "microsoft.compute/virtualmachines" not in matched
@@ -87,7 +91,7 @@ class TestDiscoveryMatching:
         assert len(matched) == 0
 
     def test_case_insensitive_matching(self) -> None:
-        discovered_type = "Microsoft.Sql/servers"
+        discovered_type = "Microsoft.KeyVault/vaults"
         assert discovered_type.lower() in RESOURCE_TYPE_REGISTRY
 
     def test_networking_discovery_triggers(self) -> None:

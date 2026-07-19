@@ -185,6 +185,9 @@ class SQLServerExtractor:
     - Dynamic Data Masking rules
     - TDE status
 
+    Uses mssql-python (pure Python, no ODBC driver) by default.
+    Falls back to pyodbc if mssql-python is not installed.
+
     Args:
         tenant_id: Azure AD tenant ID.
         snapshot_id: Current snapshot ID.
@@ -197,21 +200,23 @@ class SQLServerExtractor:
 
     def extract_database(
         self,
-        connection_string: str,
         server_name: str,
         database_name: str,
+        access_token: str | None = None,
+        connection_string: str | None = None,
     ) -> ExtractResult:
         """Extract all permissions from a specific database.
 
         Args:
-            connection_string: pyodbc connection string.
-            server_name: SQL server name (for resource mapping).
+            server_name: SQL server FQDN (e.g. myserver.database.windows.net).
             database_name: Database name.
+            access_token: Azure AD access token for SSO auth.
+            connection_string: Legacy pyodbc connection string (fallback).
 
         Returns:
             ExtractResult with resources and assignments.
         """
-        import pyodbc
+        from src.extractors.sql.connection import SQLConnection
 
         start_time = time.monotonic()
         resources: list[dict[str, Any]] = []
@@ -223,7 +228,12 @@ class SQLServerExtractor:
         db_resource_id = generate_surrogate_key("sql", f"{server_name}/{database_name}")
 
         try:
-            conn = pyodbc.connect(connection_string, timeout=30)
+            conn = SQLConnection.connect(
+                server=server_name,
+                database=database_name,
+                access_token=access_token,
+                connection_string=connection_string,
+            )
             cursor = conn.cursor()
 
             # ─── Database Users ───
@@ -292,7 +302,7 @@ class SQLServerExtractor:
 
             conn.close()
 
-        except pyodbc.Error as e:
+        except Exception as e:
             errors.append(f"Connection to {database_name}: {e}")
             self.logger.error("sql_connection_failed", db=database_name, error=str(e))
 
@@ -310,17 +320,23 @@ class SQLServerExtractor:
             extractor_name="SQLServerExtractor",
         )
 
-    def extract_server_level(self, connection_string: str, server_name: str) -> ExtractResult:
+    def extract_server_level(
+        self,
+        server_name: str,
+        access_token: str | None = None,
+        connection_string: str | None = None,
+    ) -> ExtractResult:
         """Extract server-level logins, roles, and permissions.
 
         Args:
-            connection_string: pyodbc connection string to master database.
-            server_name: SQL server name.
+            server_name: SQL server FQDN.
+            access_token: Azure AD access token.
+            connection_string: Legacy pyodbc connection string (fallback).
 
         Returns:
             ExtractResult with server-level records.
         """
-        import pyodbc
+        from src.extractors.sql.connection import SQLConnection
 
         start_time = time.monotonic()
         resources: list[dict[str, Any]] = []
@@ -330,7 +346,12 @@ class SQLServerExtractor:
         server_resource_id = generate_surrogate_key("sql", server_name)
 
         try:
-            conn = pyodbc.connect(connection_string, timeout=30)
+            conn = SQLConnection.connect(
+                server=server_name,
+                database="master",
+                access_token=access_token,
+                connection_string=connection_string,
+            )
             cursor = conn.cursor()
 
             # Server logins
@@ -397,7 +418,7 @@ class SQLServerExtractor:
 
             conn.close()
 
-        except pyodbc.Error as e:
+        except Exception as e:
             errors.append(f"Server connection: {e}")
             self.logger.error("sql_server_connect_failed", error=str(e))
 
@@ -408,6 +429,163 @@ class SQLServerExtractor:
             record_count=len(resources) + len(assignments),
             duration_seconds=duration,
             extractor_name="SQLServerExtractor_ServerLevel",
+        )
+
+    def extract_subscription(
+        self,
+        credential: TokenCredential,
+        subscription_id: str,
+        access_token: str | None = None,
+    ) -> ExtractResult:
+        """Auto-discover SQL servers in a subscription and deep-extract all.
+
+        Steps:
+        1. ARM SDK lists all SQL servers and databases
+        2. Gets AD admins, firewall rules (ARM-level)
+        3. Connects to each database via token auth and extracts deep permissions
+
+        Args:
+            credential: Azure SDK credential.
+            subscription_id: Azure subscription GUID.
+            access_token: Azure AD token for SQL data-plane access.
+
+        Returns:
+            Combined ExtractResult from ARM + deep extraction.
+        """
+        start_time = time.monotonic()
+        all_resources: list[dict[str, Any]] = []
+        all_assignments: list[dict[str, Any]] = []
+        all_rls: list[dict[str, Any]] = []
+        all_ddm: list[dict[str, Any]] = []
+        errors: list[str] = []
+
+        try:
+            from azure.mgmt.sql import SqlManagementClient
+            client = SqlManagementClient(credential, subscription_id)
+
+            for server in client.servers.list():
+                server_id = server.id or ""
+                server_fqdn = server.fully_qualified_domain_name or f"{server.name}.database.windows.net"
+                server_resource_id = generate_surrogate_key("sql", server_id)
+                rg_name = self._extract_rg(server_id)
+
+                self.logger.info(
+                    "sql_server_discovered",
+                    server=server.name,
+                    fqdn=server_fqdn,
+                    subscription=subscription_id,
+                )
+
+                # ARM-level: AD Admin
+                try:
+                    admins = client.server_azure_ad_administrators.list_by_server(rg_name, server.name)
+                    for admin in admins:
+                        all_assignments.append({
+                            "assignment_id": generate_surrogate_key(
+                                "sql_ad_admin", f"{server_id}:{admin.sid}"
+                            ),
+                            "principal_id": generate_surrogate_key("entra", admin.sid or ""),
+                            "resource_id": server_resource_id,
+                            "assignment_type": "SQL_DB_ROLE",
+                            "source": "SQL_ARM",
+                            "snapshot_id": self.snapshot_id,
+                            "_role_name": "AD_Admin",
+                            "_admin_name": admin.login or "",
+                        })
+                except Exception as e:
+                    errors.append(f"AD admin {server.name}: {e}")
+
+                # ARM-level: Firewall rules
+                try:
+                    rules = client.firewall_rules.list_by_server(rg_name, server.name)
+                    for rule in rules:
+                        all_resources.append({
+                            "resource_id": generate_surrogate_key(
+                                "sql_fw", f"{server_id}:{rule.name}"
+                            ),
+                            "resource_type": "GENERIC",
+                            "name": f"FW: {rule.name} ({rule.start_ip_address}-{rule.end_ip_address})",
+                            "parent_id": server_resource_id,
+                        })
+                except Exception as e:
+                    errors.append(f"Firewall {server.name}: {e}")
+
+                # Deep extraction: each database
+                try:
+                    for db in client.databases.list_by_server(rg_name, server.name):
+                        if db.name == "master":
+                            continue
+
+                        all_resources.append({
+                            "resource_id": generate_surrogate_key("sql", db.id or ""),
+                            "tenant_id": self.tenant_id,
+                            "resource_guid": db.id or "",
+                            "resource_type": "SQL_DATABASE",
+                            "name": db.name or "",
+                            "parent_id": server_resource_id,
+                        })
+
+                        # Deep-extract via T-SQL
+                        if access_token:
+                            try:
+                                deep_result = self.extract_database(
+                                    server_name=server_fqdn,
+                                    database_name=db.name,
+                                    access_token=access_token,
+                                )
+                                for rec in deep_result.records:
+                                    all_resources.extend(rec.get("resources", []))
+                                    all_assignments.extend(rec.get("assignments", []))
+                                    all_rls.extend(rec.get("rls_policies", []))
+                                    all_ddm.extend(rec.get("ddm_rules", []))
+                                errors.extend(deep_result.errors)
+                                self.logger.info(
+                                    "sql_deep_extracted",
+                                    server=server.name,
+                                    database=db.name,
+                                    records=deep_result.record_count,
+                                )
+                            except Exception as e:
+                                errors.append(f"Deep extract {server.name}/{db.name}: {e}")
+                        else:
+                            self.logger.warning(
+                                "sql_deep_skipped_no_token",
+                                server=server.name,
+                                database=db.name,
+                            )
+                except Exception as e:
+                    errors.append(f"Databases {server.name}: {e}")
+
+                # Server-level deep extraction (master)
+                if access_token:
+                    try:
+                        server_result = self.extract_server_level(
+                            server_name=server_fqdn,
+                            access_token=access_token,
+                        )
+                        for rec in server_result.records:
+                            all_resources.extend(rec.get("resources", []))
+                            all_assignments.extend(rec.get("assignments", []))
+                        errors.extend(server_result.errors)
+                    except Exception as e:
+                        errors.append(f"Server-level {server.name}: {e}")
+
+        except Exception as e:
+            errors.append(f"SQL ARM discovery: {e}")
+            self.logger.error("sql_subscription_scan_failed", error=str(e))
+
+        duration = time.monotonic() - start_time
+        return ExtractResult(
+            records=[{
+                "resources": all_resources,
+                "assignments": all_assignments,
+                "rls_policies": all_rls,
+                "ddm_rules": all_ddm,
+            }],
+            errors=errors,
+            record_count=len(all_resources) + len(all_assignments) + len(all_rls) + len(all_ddm),
+            duration_seconds=duration,
+            extractor_name="SQLServerExtractor_SubscriptionScan",
         )
 
     def extract_via_arm(self, credential: TokenCredential, subscription_id: str) -> ExtractResult:
