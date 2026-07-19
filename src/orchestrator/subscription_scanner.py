@@ -113,6 +113,20 @@ class SubscriptionScanner:
         self.snapshot_id = snapshot_id
         self.settings = settings
 
+    def _add_result(self, results: dict[str, Any], name: str, result: Any) -> None:
+        results[name] = {
+            "records": getattr(result, "records", []),
+            "count": getattr(result, "record_count", 0),
+            "errors": getattr(result, "errors", []),
+            "duration": getattr(result, "duration_seconds", 0.0),
+        }
+
+    def _append_result(self, results: dict[str, Any], name: str, result: Any) -> None:
+        results.setdefault(name, {"count": 0, "errors": [], "records": []})
+        results[name]["count"] += getattr(result, "record_count", 0)
+        results[name]["errors"].extend(getattr(result, "errors", []))
+        results[name]["records"].extend(getattr(result, "records", []))
+
     async def scan(self, subscription_ids: list[str]) -> dict[str, Any]:
         """Scan subscriptions — discover resources and extract permissions.
 
@@ -233,10 +247,7 @@ class SubscriptionScanner:
                 self.credential, self.tenant_id, self.snapshot_id, subscription_ids
             )
             rg_result = rg_ext.extract()
-            results["resource_graph"] = {
-                "count": rg_result.record_count,
-                "errors": rg_result.errors,
-            }
+            self._add_result(results, "resource_graph", rg_result)
 
             logger.info(
                 "resource_discovery_complete",
@@ -272,6 +283,10 @@ class SubscriptionScanner:
 
         Uses mssql-python (pure Python, no ODBC driver) for data-plane access.
         """
+        if not self.settings.extract_sql:
+            logger.info("sql_extraction_disabled_by_config")
+            return
+
         from src.extractors.sql.connection import SQL_TOKEN_SCOPE
 
         try:
@@ -288,9 +303,7 @@ class SubscriptionScanner:
                         subscription_id=sub_id,
                         access_token=sql_token,
                     )
-                    results.setdefault("sql_deep", {"count": 0, "errors": []})
-                    results["sql_deep"]["count"] += sql_result.record_count
-                    results["sql_deep"]["errors"].extend(sql_result.errors)
+                    self._append_result(results, "sql_deep", sql_result)
 
                     logger.info(
                         "sql_deep_extracted",
@@ -299,7 +312,7 @@ class SubscriptionScanner:
                         errors=len(sql_result.errors),
                     )
                 except Exception as e:
-                    results.setdefault("sql_deep", {"count": 0, "errors": []})
+                    results.setdefault("sql_deep", {"count": 0, "errors": [], "records": []})
                     results["sql_deep"]["errors"].append(f"{sub_id}: {e}")
                     logger.warning("sql_deep_failed", subscription=sub_id, error=str(e))
 
@@ -313,40 +326,39 @@ class SubscriptionScanner:
 
     async def _extract_entra(self, results: dict[str, Any]) -> None:
         """Extract Entra ID objects (users, groups, memberships, roles, SPs)."""
-        try:
-            from config.scopes import GRAPH_DELEGATED_SCOPES
-            graph_token = self.msal_client.get_token(GRAPH_DELEGATED_SCOPES)
+        if self.settings.extract_entra:
+            try:
+                from config.scopes import GRAPH_DELEGATED_SCOPES
+                graph_token = self.msal_client.get_token(GRAPH_DELEGATED_SCOPES)
 
-            from src.extractors.entra.users import UserExtractor
-            from src.extractors.entra.groups import GroupExtractor
-            from src.extractors.entra.memberships import MembershipExtractor
-            from src.extractors.entra.roles import DirectoryRoleExtractor
-            from src.extractors.entra.service_principals import ServicePrincipalExtractor
+                from src.extractors.entra.users import UserExtractor
+                from src.extractors.entra.groups import GroupExtractor
+                from src.extractors.entra.memberships import MembershipExtractor
+                from src.extractors.entra.roles import DirectoryRoleExtractor
+                from src.extractors.entra.service_principals import ServicePrincipalExtractor
 
-            extractors = [
-                ("users", UserExtractor(self.tenant_id, graph_token, self.snapshot_id)),
-                ("groups", GroupExtractor(self.tenant_id, graph_token, self.snapshot_id)),
-                ("memberships", MembershipExtractor(self.tenant_id, graph_token, self.snapshot_id)),
-                ("directory_roles", DirectoryRoleExtractor(self.tenant_id, graph_token, self.snapshot_id)),
-                ("service_principals", ServicePrincipalExtractor(self.tenant_id, graph_token, self.snapshot_id)),
-            ]
+                extractors = [
+                    ("users", UserExtractor(self.tenant_id, graph_token, self.snapshot_id)),
+                    ("groups", GroupExtractor(self.tenant_id, graph_token, self.snapshot_id)),
+                    ("memberships", MembershipExtractor(self.tenant_id, graph_token, self.snapshot_id)),
+                    ("directory_roles", DirectoryRoleExtractor(self.tenant_id, graph_token, self.snapshot_id)),
+                    ("service_principals", ServicePrincipalExtractor(self.tenant_id, graph_token, self.snapshot_id)),
+                ]
 
-            for name, extractor in extractors:
-                try:
-                    result = await extractor.extract()
-                    results[name] = {
-                        "count": result.record_count,
-                        "errors": result.errors,
-                        "duration": result.duration_seconds,
-                    }
-                    logger.info(f"extracted_{name}", count=result.record_count)
-                except Exception as e:
-                    results[name] = {"error": str(e)}
-                    logger.error(f"extraction_failed_{name}", error=str(e))
+                for name, extractor in extractors:
+                    try:
+                        result = await extractor.extract()
+                        self._add_result(results, name, result)
+                        logger.info(f"extracted_{name}", count=result.record_count)
+                    except Exception as e:
+                        results[name] = {"error": str(e)}
+                        logger.error(f"extraction_failed_{name}", error=str(e))
 
-        except Exception as e:
-            results["entra"] = {"error": str(e)}
-            logger.error("entra_extraction_failed", error=str(e))
+            except Exception as e:
+                results["entra"] = {"error": str(e)}
+                logger.error("entra_extraction_failed", error=str(e))
+        else:
+            logger.info("entra_extraction_disabled_by_config")
 
     # ─────────────────────────────────────────────────────────────
     # Internal: Azure RBAC
@@ -367,13 +379,13 @@ class SubscriptionScanner:
             # Subscriptions + resource groups
             sub_ext = SubscriptionExtractor(self.credential, self.tenant_id, self.snapshot_id)
             sub_result = sub_ext.extract()
-            results["subscriptions"] = {"count": sub_result.record_count, "errors": sub_result.errors}
+            self._add_result(results, "subscriptions", sub_result)
 
             # Management groups
             try:
                 mg_ext = ManagementGroupExtractor(self.credential, self.tenant_id, self.snapshot_id)
                 mg_result = mg_ext.extract()
-                results["management_groups"] = {"count": mg_result.record_count, "errors": mg_result.errors}
+                self._add_result(results, "management_groups", mg_result)
             except Exception as e:
                 results["management_groups"] = {"error": str(e)}
 
@@ -383,9 +395,7 @@ class SubscriptionScanner:
                 try:
                     rd_ext = RoleDefinitionExtractor(self.credential, self.tenant_id, self.snapshot_id)
                     rd_result = rd_ext.extract(scope)
-                    results.setdefault("role_definitions", {"count": 0, "errors": []})
-                    results["role_definitions"]["count"] += rd_result.record_count
-                    results["role_definitions"]["errors"].extend(rd_result.errors)
+                    self._append_result(results, "role_definitions", rd_result)
                 except Exception as e:
                     results.setdefault("role_definitions", {"errors": []})
                     results["role_definitions"]["errors"].append(str(e))
@@ -393,9 +403,7 @@ class SubscriptionScanner:
                 try:
                     ra_ext = RoleAssignmentExtractor(self.credential, self.tenant_id, self.snapshot_id)
                     ra_result = ra_ext.extract(scope)
-                    results.setdefault("role_assignments", {"count": 0, "errors": []})
-                    results["role_assignments"]["count"] += ra_result.record_count
-                    results["role_assignments"]["errors"].extend(ra_result.errors)
+                    self._append_result(results, "role_assignments", ra_result)
                 except Exception as e:
                     results.setdefault("role_assignments", {"errors": []})
                     results["role_assignments"]["errors"].append(str(e))
@@ -470,6 +478,20 @@ class SubscriptionScanner:
             label = entry["label"]
             result_key = label.lower().replace(" ", "_").replace("(", "").replace(")", "")
 
+            # Check config feature flags
+            if "cosmos" in result_key and not self.settings.extract_cosmosdb:
+                logger.info("cosmosdb_extraction_disabled_by_config")
+                continue
+            if "key_vault" in result_key and not self.settings.extract_keyvault:
+                logger.info("key_vault_extraction_disabled_by_config")
+                continue
+            if "storage" in result_key and not self.settings.extract_storage:
+                logger.info("storage_extraction_disabled_by_config")
+                continue
+            if "network" in result_key and not self.settings.extract_networking:
+                logger.info("networking_extraction_disabled_by_config")
+                continue
+
             try:
                 module = importlib.import_module(entry["extractor_module"])
                 extractor_cls = getattr(module, entry["extractor_class"])
@@ -491,11 +513,9 @@ class SubscriptionScanner:
                             else:
                                 ext_result = ext.extract()
 
-                            results.setdefault(result_key, {"count": 0, "errors": []})
-                            results[result_key]["count"] += ext_result.record_count
-                            results[result_key]["errors"].extend(ext_result.errors)
+                            self._append_result(results, result_key, ext_result)
                     except Exception as e:
-                        results.setdefault(result_key, {"count": 0, "errors": []})
+                        results.setdefault(result_key, {"count": 0, "errors": [], "records": []})
                         results[result_key]["errors"].append(f"{sub_id}: {str(e)}")
                         logger.warning(
                             "extractor_error",
@@ -504,7 +524,7 @@ class SubscriptionScanner:
                             error=str(e),
                         )
 
-                logger.info(f"auto_extracted_{result_key}", result=results.get(result_key))
+                logger.info(f"auto_extracted_{result_key}", count=results.get(result_key, {}).get("count", 0))
 
             except Exception as e:
                 results[result_key] = {"error": str(e)}
@@ -516,33 +536,36 @@ class SubscriptionScanner:
 
     async def _extract_fabric(self, results: dict[str, Any]) -> None:
         """Extract Fabric workspaces and deep Power BI permissions."""
-        try:
-            from config.scopes import FABRIC_SCOPES
-            fabric_token = self.msal_client.get_token(FABRIC_SCOPES)
+        if self.settings.extract_fabric:
+            try:
+                from config.scopes import FABRIC_SCOPES
+                fabric_token = self.msal_client.get_token(FABRIC_SCOPES)
 
-            from src.extractors.fabric.workspaces import FabricWorkspaceExtractor
-            fabric_ext = FabricWorkspaceExtractor(self.tenant_id, fabric_token, self.snapshot_id)
-            fabric_result = await fabric_ext.extract()
-            results["fabric_workspaces"] = {"count": fabric_result.record_count, "errors": fabric_result.errors}
+                from src.extractors.fabric.workspaces import FabricWorkspaceExtractor
+                fabric_ext = FabricWorkspaceExtractor(self.tenant_id, fabric_token, self.snapshot_id)
+                fabric_result = await fabric_ext.extract()
+                self._add_result(results, "fabric_workspaces", fabric_result)
 
-            from src.extractors.fabric.powerbi_permissions import PowerBIDeepPermissionsExtractor
-            pbi_deep = PowerBIDeepPermissionsExtractor(self.tenant_id, fabric_token, self.snapshot_id)
-            pbi_deep_result = await pbi_deep.extract()
-            results["pbi_deep_permissions"] = {"count": pbi_deep_result.record_count, "errors": pbi_deep_result.errors}
+                from src.extractors.fabric.powerbi_permissions import PowerBIDeepPermissionsExtractor
+                pbi_deep = PowerBIDeepPermissionsExtractor(self.tenant_id, fabric_token, self.snapshot_id)
+                pbi_deep_result = await pbi_deep.extract()
+                self._add_result(results, "pbi_deep_permissions", pbi_deep_result)
 
-            from src.extractors.fabric.item_permissions import FabricItemPermissionsExtractor
-            item_ext = FabricItemPermissionsExtractor(self.tenant_id, fabric_token, self.snapshot_id)
-            item_result = await item_ext.extract()
-            results["fabric_item_permissions"] = {"count": item_result.record_count, "errors": item_result.errors}
+                from src.extractors.fabric.item_permissions import FabricItemPermissionsExtractor
+                item_ext = FabricItemPermissionsExtractor(self.tenant_id, fabric_token, self.snapshot_id)
+                item_result = await item_ext.extract()
+                self._add_result(results, "fabric_item_permissions", item_result)
 
-            from src.extractors.fabric.powerbi import PowerBIExtractor
-            pbi_ext = PowerBIExtractor(self.tenant_id, fabric_token, self.snapshot_id)
-            pbi_result = await pbi_ext.extract()
-            results["pbi_resources"] = {"count": pbi_result.record_count, "errors": pbi_result.errors}
+                from src.extractors.fabric.powerbi import PowerBIExtractor
+                pbi_ext = PowerBIExtractor(self.tenant_id, fabric_token, self.snapshot_id)
+                pbi_result = await pbi_ext.extract()
+                self._add_result(results, "pbi_resources", pbi_result)
 
-        except Exception as e:
-            results["fabric"] = {"error": str(e)}
-            logger.warning("fabric_extraction_skipped", error=str(e))
+            except Exception as e:
+                results["fabric"] = {"error": str(e)}
+                logger.warning("fabric_extraction_skipped", error=str(e))
+        else:
+            logger.info("fabric_extraction_disabled_by_config")
 
     # ─────────────────────────────────────────────────────────────
     # Internal: SharePoint + Teams
@@ -559,7 +582,7 @@ class SubscriptionScanner:
                     from src.extractors.sharepoint.permissions import SharePointPermissionsExtractor
                     sp_ext = SharePointPermissionsExtractor(self.tenant_id, graph_token, self.snapshot_id)
                     sp_result = await sp_ext.extract()
-                    results["sharepoint"] = {"count": sp_result.record_count, "errors": sp_result.errors}
+                    self._add_result(results, "sharepoint", sp_result)
                 except Exception as e:
                     results["sharepoint"] = {"error": str(e)}
 
@@ -568,7 +591,7 @@ class SubscriptionScanner:
                     from src.extractors.sharepoint.teams import TeamsPermissionsExtractor
                     teams_ext = TeamsPermissionsExtractor(self.tenant_id, graph_token, self.snapshot_id)
                     teams_result = await teams_ext.extract()
-                    results["teams"] = {"count": teams_result.record_count, "errors": teams_result.errors}
+                    self._add_result(results, "teams", teams_result)
                 except Exception as e:
                     results["teams"] = {"error": str(e)}
 
@@ -582,22 +605,23 @@ class SubscriptionScanner:
 
     async def _extract_aas(self, results: dict[str, Any]) -> None:
         """Extract AAS/XMLA databases, roles, and RLS if servers are configured."""
-        if not self.settings.aas_servers:
-            return
+        if self.settings.extract_aas:
+            if not self.settings.aas_servers:
+                return
 
-        for server_url in self.settings.aas_servers:
-            try:
-                aas_token = self.msal_client.get_token(
-                    ["https://analysis.windows.net/powerbi/api/.default"]
-                )
-                from src.extractors.aas.models import AnalysisServicesExtractor
-                aas_ext = AnalysisServicesExtractor(
-                    server_url, aas_token, self.tenant_id, self.snapshot_id
-                )
-                aas_result = await aas_ext.extract()
-                results.setdefault("analysis_services", {"count": 0, "errors": []})
-                results["analysis_services"]["count"] += aas_result.record_count
-                results["analysis_services"]["errors"].extend(aas_result.errors)
-            except Exception as e:
-                results.setdefault("analysis_services", {"errors": []})
-                results["analysis_services"]["errors"].append(str(e))
+            for server_url in self.settings.aas_servers:
+                try:
+                    aas_token = self.msal_client.get_token(
+                        ["https://analysis.windows.net/powerbi/api/.default"]
+                    )
+                    from src.extractors.aas.models import AnalysisServicesExtractor
+                    aas_ext = AnalysisServicesExtractor(
+                        server_url, aas_token, self.tenant_id, self.snapshot_id
+                    )
+                    aas_result = await aas_ext.extract()
+                    self._append_result(results, "analysis_services", aas_result)
+                except Exception as e:
+                    results.setdefault("analysis_services", {"errors": []})
+                    results["analysis_services"]["errors"].append(str(e))
+        else:
+            logger.info("aas_extraction_disabled_by_config")

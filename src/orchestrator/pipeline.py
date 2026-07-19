@@ -294,40 +294,39 @@ class Pipeline:
         # ─────────────────────────────────────────────────
         # 1. Entra ID (users, groups, memberships, roles, SPs)
         # ─────────────────────────────────────────────────
-        try:
-            from config.scopes import GRAPH_DELEGATED_SCOPES
-            graph_token = msal_client.get_token(GRAPH_DELEGATED_SCOPES)
+        if self.settings.extract_entra:
+            try:
+                from config.scopes import GRAPH_DELEGATED_SCOPES
+                graph_token = msal_client.get_token(GRAPH_DELEGATED_SCOPES)
 
-            from src.extractors.entra.users import UserExtractor
-            from src.extractors.entra.groups import GroupExtractor
-            from src.extractors.entra.memberships import MembershipExtractor
-            from src.extractors.entra.roles import DirectoryRoleExtractor
-            from src.extractors.entra.service_principals import ServicePrincipalExtractor
+                from src.extractors.entra.users import UserExtractor
+                from src.extractors.entra.groups import GroupExtractor
+                from src.extractors.entra.memberships import MembershipExtractor
+                from src.extractors.entra.roles import DirectoryRoleExtractor
+                from src.extractors.entra.service_principals import ServicePrincipalExtractor
 
-            entra_extractors = [
-                ("users", UserExtractor(self.settings.tenant_id, graph_token, snapshot_id)),
-                ("groups", GroupExtractor(self.settings.tenant_id, graph_token, snapshot_id)),
-                ("memberships", MembershipExtractor(self.settings.tenant_id, graph_token, snapshot_id)),
-                ("directory_roles", DirectoryRoleExtractor(self.settings.tenant_id, graph_token, snapshot_id)),
-                ("service_principals", ServicePrincipalExtractor(self.settings.tenant_id, graph_token, snapshot_id)),
-            ]
+                entra_extractors = [
+                    ("users", UserExtractor(self.settings.tenant_id, graph_token, snapshot_id)),
+                    ("groups", GroupExtractor(self.settings.tenant_id, graph_token, snapshot_id)),
+                    ("memberships", MembershipExtractor(self.settings.tenant_id, graph_token, snapshot_id)),
+                    ("directory_roles", DirectoryRoleExtractor(self.settings.tenant_id, graph_token, snapshot_id)),
+                    ("service_principals", ServicePrincipalExtractor(self.settings.tenant_id, graph_token, snapshot_id)),
+                ]
 
-            for name, extractor in entra_extractors:
-                try:
-                    result = await extractor.extract()
-                    results[name] = {
-                        "count": result.record_count,
-                        "errors": result.errors,
-                        "duration": result.duration_seconds,
-                    }
-                    logger.info(f"extracted_{name}", count=result.record_count)
-                except Exception as e:
-                    results[name] = {"error": str(e)}
-                    logger.error(f"extraction_failed_{name}", error=str(e))
+                for name, extractor in entra_extractors:
+                    try:
+                        result = await extractor.extract()
+                        self._add_result(results, name, result)
+                        logger.info(f"extracted_{name}", count=result.record_count)
+                    except Exception as e:
+                        results[name] = {"error": str(e)}
+                        logger.error(f"extraction_failed_{name}", error=str(e))
 
-        except Exception as e:
-            results["entra"] = {"error": str(e)}
-            logger.error("entra_extraction_failed", error=str(e))
+            except Exception as e:
+                results["entra"] = {"error": str(e)}
+                logger.error("entra_extraction_failed", error=str(e))
+        else:
+            logger.info("entra_extraction_disabled_by_config")
 
         # ─────────────────────────────────────────────────
         # 2. Azure RBAC (subscriptions, MGs, role defs, assignments, resources)
@@ -343,7 +342,7 @@ class Pipeline:
             # Subscriptions + resource groups
             sub_ext = SubscriptionExtractor(credential, self.settings.tenant_id, snapshot_id)
             sub_result = sub_ext.extract()
-            results["subscriptions"] = {"count": sub_result.record_count, "errors": sub_result.errors}
+            self._add_result(results, "subscriptions", sub_result)
             if sub_result.records:
                 subscription_ids = sub_result.records[0].get("subscription_ids", [])
 
@@ -351,7 +350,7 @@ class Pipeline:
             try:
                 mg_ext = ManagementGroupExtractor(credential, self.settings.tenant_id, snapshot_id)
                 mg_result = mg_ext.extract()
-                results["management_groups"] = {"count": mg_result.record_count, "errors": mg_result.errors}
+                self._add_result(results, "management_groups", mg_result)
             except Exception as e:
                 results["management_groups"] = {"error": str(e)}
 
@@ -361,9 +360,7 @@ class Pipeline:
                 try:
                     rd_ext = RoleDefinitionExtractor(credential, self.settings.tenant_id, snapshot_id)
                     rd_result = rd_ext.extract(scope)
-                    results.setdefault("role_definitions", {"count": 0, "errors": []})
-                    results["role_definitions"]["count"] += rd_result.record_count
-                    results["role_definitions"]["errors"].extend(rd_result.errors)
+                    self._append_result(results, "role_definitions", rd_result)
                 except Exception as e:
                     results.setdefault("role_definitions", {"errors": []})
                     results["role_definitions"]["errors"].append(str(e))
@@ -371,9 +368,7 @@ class Pipeline:
                 try:
                     ra_ext = RoleAssignmentExtractor(credential, self.settings.tenant_id, snapshot_id)
                     ra_result = ra_ext.extract(scope)
-                    results.setdefault("role_assignments", {"count": 0, "errors": []})
-                    results["role_assignments"]["count"] += ra_result.record_count
-                    results["role_assignments"]["errors"].extend(ra_result.errors)
+                    self._append_result(results, "role_assignments", ra_result)
                 except Exception as e:
                     results.setdefault("role_assignments", {"errors": []})
                     results["role_assignments"]["errors"].append(str(e))
@@ -383,7 +378,7 @@ class Pipeline:
                 try:
                     rg_ext = ResourceGraphExtractor(credential, self.settings.tenant_id, snapshot_id, subscription_ids)
                     rg_result = rg_ext.extract()
-                    results["resource_graph"] = {"count": rg_result.record_count, "errors": rg_result.errors}
+                    self._add_result(results, "resource_graph", rg_result)
                 except Exception as e:
                     results["resource_graph"] = {"error": str(e)}
 
@@ -392,61 +387,63 @@ class Pipeline:
             logger.error("azure_rbac_failed", error=str(e))
 
         # ─────────────────────────────────────────────────
+        # ─────────────────────────────────────────────────
         # 3. Storage (accounts, containers, ACLs)
         # ─────────────────────────────────────────────────
-        for sub_id in subscription_ids:
-            try:
-                from src.extractors.storage.accounts import StorageAccountExtractor
-                sa_ext = StorageAccountExtractor(credential, self.settings.tenant_id, snapshot_id)
-                sa_result = sa_ext.extract(sub_id)
-                results.setdefault("storage_accounts", {"count": 0, "errors": []})
-                results["storage_accounts"]["count"] += sa_result.record_count
-                results["storage_accounts"]["errors"].extend(sa_result.errors)
-            except Exception as e:
-                results.setdefault("storage_accounts", {"errors": []})
-                results["storage_accounts"]["errors"].append(str(e))
+        if self.settings.extract_storage:
+            for sub_id in subscription_ids:
+                try:
+                    from src.extractors.storage.accounts import StorageAccountExtractor
+                    sa_ext = StorageAccountExtractor(credential, self.settings.tenant_id, snapshot_id)
+                    sa_result = sa_ext.extract(sub_id)
+                    self._append_result(results, "storage_accounts", sa_result)
+                except Exception as e:
+                    results.setdefault("storage_accounts", {"errors": []})
+                    results["storage_accounts"]["errors"].append(str(e))
+        else:
+            logger.info("storage_extraction_disabled_by_config")
 
         # ─────────────────────────────────────────────────
         # 4. Key Vault (vault access policies + sub-resource RBAC)
         # ─────────────────────────────────────────────────
-        for sub_id in subscription_ids:
-            try:
-                from src.extractors.keyvault.vaults import KeyVaultExtractor
-                kv_ext = KeyVaultExtractor(credential, self.settings.tenant_id, snapshot_id)
-                kv_result = kv_ext.extract(sub_id)
-                results.setdefault("keyvault", {"count": 0, "errors": []})
-                results["keyvault"]["count"] += kv_result.record_count
-                results["keyvault"]["errors"].extend(kv_result.errors)
-            except Exception as e:
-                results.setdefault("keyvault", {"errors": []})
-                results["keyvault"]["errors"].append(str(e))
+        if self.settings.extract_keyvault:
+            for sub_id in subscription_ids:
+                try:
+                    from src.extractors.keyvault.vaults import KeyVaultExtractor
+                    kv_ext = KeyVaultExtractor(credential, self.settings.tenant_id, snapshot_id)
+                    kv_result = kv_ext.extract(sub_id)
+                    self._append_result(results, "keyvault", kv_result)
+                except Exception as e:
+                    results.setdefault("keyvault", {"errors": []})
+                    results["keyvault"]["errors"].append(str(e))
 
-            # Deep Key Vault: individual key/secret/cert RBAC
-            try:
-                from src.extractors.keyvault.deep_permissions import KeyVaultDeepExtractor
-                kvd_ext = KeyVaultDeepExtractor(credential, self.settings.tenant_id, snapshot_id)
-                kvd_result = kvd_ext.extract(sub_id)
-                results.setdefault("keyvault_deep", {"count": 0, "errors": []})
-                results["keyvault_deep"]["count"] += kvd_result.record_count
-                results["keyvault_deep"]["errors"].extend(kvd_result.errors)
-            except Exception as e:
-                results.setdefault("keyvault_deep", {"errors": []})
-                results["keyvault_deep"]["errors"].append(str(e))
+                # Deep Key Vault: individual key/secret/cert RBAC
+                try:
+                    from src.extractors.keyvault.deep_permissions import KeyVaultDeepExtractor
+                    kvd_ext = KeyVaultDeepExtractor(credential, self.settings.tenant_id, snapshot_id)
+                    kvd_result = kvd_ext.extract(sub_id)
+                    self._append_result(results, "keyvault_deep", kvd_result)
+                except Exception as e:
+                    results.setdefault("keyvault_deep", {"errors": []})
+                    results["keyvault_deep"]["errors"].append(str(e))
+        else:
+            logger.info("keyvault_extraction_disabled_by_config")
 
         # ─────────────────────────────────────────────────
         # 5. SQL Server (ARM + deep T-SQL permissions)
         # ─────────────────────────────────────────────────
-        for sub_id in subscription_ids:
-            try:
-                from src.extractors.sql.permissions import SQLServerExtractor
-                sql_ext = SQLServerExtractor(self.settings.tenant_id, snapshot_id)
-                sql_arm_result = sql_ext.extract_via_arm(credential, sub_id)
-                results.setdefault("sql_arm", {"count": 0, "errors": []})
-                results["sql_arm"]["count"] += sql_arm_result.record_count
-                results["sql_arm"]["errors"].extend(sql_arm_result.errors)
-            except Exception as e:
-                results.setdefault("sql_arm", {"errors": []})
-                results["sql_arm"]["errors"].append(str(e))
+        if self.settings.extract_sql:
+            for sub_id in subscription_ids:
+                try:
+                    from src.extractors.sql.permissions import SQLServerExtractor
+                    sql_ext = SQLServerExtractor(self.settings.tenant_id, snapshot_id)
+                    sql_arm_result = sql_ext.extract_via_arm(credential, sub_id)
+                    self._append_result(results, "sql_arm", sql_arm_result)
+                except Exception as e:
+                    results.setdefault("sql_arm", {"errors": []})
+                    results["sql_arm"]["errors"].append(str(e))
+        else:
+            logger.info("sql_extraction_disabled_by_config")
         # NOTE: Deep T-SQL extraction (database users, roles, RLS, DDM)
         # requires direct SQL connectivity via pyodbc. Connection strings
         # are configured per-database in settings.sql_connections.
@@ -454,141 +451,444 @@ class Pipeline:
         # ─────────────────────────────────────────────────
         # 6. Cosmos DB (data-plane RBAC — separate from ARM)
         # ─────────────────────────────────────────────────
-        for sub_id in subscription_ids:
-            try:
-                from src.extractors.cosmosdb.permissions import CosmosDBExtractor
-                cosmos_ext = CosmosDBExtractor(credential, self.settings.tenant_id, snapshot_id)
-                cosmos_result = cosmos_ext.extract(sub_id)
-                results.setdefault("cosmosdb", {"count": 0, "errors": []})
-                results["cosmosdb"]["count"] += cosmos_result.record_count
-                results["cosmosdb"]["errors"].extend(cosmos_result.errors)
-            except Exception as e:
-                results.setdefault("cosmosdb", {"errors": []})
-                results["cosmosdb"]["errors"].append(str(e))
+        if self.settings.extract_cosmosdb:
+            for sub_id in subscription_ids:
+                try:
+                    from src.extractors.cosmosdb.permissions import CosmosDBExtractor
+                    cosmos_ext = CosmosDBExtractor(credential, self.settings.tenant_id, snapshot_id)
+                    cosmos_result = cosmos_ext.extract(sub_id)
+                    self._append_result(results, "cosmosdb", cosmos_result)
+                except Exception as e:
+                    results.setdefault("cosmosdb", {"errors": []})
+                    results["cosmosdb"]["errors"].append(str(e))
+        else:
+            logger.info("cosmosdb_extraction_disabled_by_config")
 
         # ─────────────────────────────────────────────────
         # 7. Fabric / Power BI (deep per-item permissions)
         # ─────────────────────────────────────────────────
-        try:
-            from config.scopes import FABRIC_SCOPES
-            fabric_token = msal_client.get_token(FABRIC_SCOPES)
+        if self.settings.extract_fabric:
+            try:
+                from config.scopes import FABRIC_SCOPES
+                fabric_token = msal_client.get_token(FABRIC_SCOPES)
 
-            # Workspace + items listing
-            from src.extractors.fabric.workspaces import FabricWorkspaceExtractor
-            fabric_ext = FabricWorkspaceExtractor(self.settings.tenant_id, fabric_token, snapshot_id)
-            fabric_result = await fabric_ext.extract()
-            results["fabric_workspaces"] = {"count": fabric_result.record_count, "errors": fabric_result.errors}
+                # Workspace + items listing
+                from src.extractors.fabric.workspaces import FabricWorkspaceExtractor
+                fabric_ext = FabricWorkspaceExtractor(self.settings.tenant_id, fabric_token, snapshot_id)
+                fabric_result = await fabric_ext.extract()
+                self._add_result(results, "fabric_workspaces", fabric_result)
 
-            # DEEP: Per-dataset/report/dashboard/app users, gateways, capacities
-            from src.extractors.fabric.powerbi_permissions import PowerBIDeepPermissionsExtractor
-            pbi_deep = PowerBIDeepPermissionsExtractor(self.settings.tenant_id, fabric_token, snapshot_id)
-            pbi_deep_result = await pbi_deep.extract()
-            results["pbi_deep_permissions"] = {"count": pbi_deep_result.record_count, "errors": pbi_deep_result.errors}
+                # DEEP: Per-dataset/report/dashboard/app users, gateways, capacities
+                from src.extractors.fabric.powerbi_permissions import PowerBIDeepPermissionsExtractor
+                pbi_deep = PowerBIDeepPermissionsExtractor(self.settings.tenant_id, fabric_token, snapshot_id)
+                pbi_deep_result = await pbi_deep.extract()
+                self._add_result(results, "pbi_deep_permissions", pbi_deep_result)
 
-            # DEEP: Fabric item-level permissions + OneLake data access roles
-            from src.extractors.fabric.item_permissions import FabricItemPermissionsExtractor
-            item_ext = FabricItemPermissionsExtractor(self.settings.tenant_id, fabric_token, snapshot_id)
-            item_result = await item_ext.extract()
-            results["fabric_item_permissions"] = {"count": item_result.record_count, "errors": item_result.errors}
+                # DEEP: Fabric item-level permissions + OneLake data access roles
+                from src.extractors.fabric.item_permissions import FabricItemPermissionsExtractor
+                item_ext = FabricItemPermissionsExtractor(self.settings.tenant_id, fabric_token, snapshot_id)
+                item_result = await item_ext.extract()
+                self._add_result(results, "fabric_item_permissions", item_result)
 
-            # Power BI Admin surface resources
-            from src.extractors.fabric.powerbi import PowerBIExtractor
-            pbi_ext = PowerBIExtractor(self.settings.tenant_id, fabric_token, snapshot_id)
-            pbi_result = await pbi_ext.extract()
-            results["pbi_resources"] = {"count": pbi_result.record_count, "errors": pbi_result.errors}
+                # Power BI Admin surface resources
+                from src.extractors.fabric.powerbi import PowerBIExtractor
+                pbi_ext = PowerBIExtractor(self.settings.tenant_id, fabric_token, snapshot_id)
+                pbi_result = await pbi_ext.extract()
+                self._add_result(results, "pbi_resources", pbi_result)
 
-        except Exception as e:
-            results["fabric"] = {"error": str(e)}
-            logger.warning("fabric_extraction_skipped", error=str(e))
+            except Exception as e:
+                results["fabric"] = {"error": str(e)}
+                logger.warning("fabric_extraction_skipped", error=str(e))
+        else:
+            logger.info("fabric_extraction_disabled_by_config")
 
         # ─────────────────────────────────────────────────
         # 8. SharePoint (site, list, item-level permissions + sharing links)
         # ─────────────────────────────────────────────────
-        try:
-            if 'graph_token' in dir():
-                from src.extractors.sharepoint.permissions import SharePointPermissionsExtractor
-                sp_ext = SharePointPermissionsExtractor(self.settings.tenant_id, graph_token, snapshot_id)
-                sp_result = await sp_ext.extract()
-                results["sharepoint"] = {"count": sp_result.record_count, "errors": sp_result.errors}
-        except Exception as e:
-            results["sharepoint"] = {"error": str(e)}
-            logger.warning("sharepoint_extraction_skipped", error=str(e))
+        if self.settings.extract_sharepoint:
+            try:
+                if 'graph_token' in locals() or 'graph_token' in globals():
+                    from src.extractors.sharepoint.permissions import SharePointPermissionsExtractor
+                    sp_ext = SharePointPermissionsExtractor(self.settings.tenant_id, graph_token, snapshot_id)
+                    sp_result = await sp_ext.extract()
+                    self._add_result(results, "sharepoint", sp_result)
+            except Exception as e:
+                results["sharepoint"] = {"error": str(e)}
+                logger.warning("sharepoint_extraction_skipped", error=str(e))
+        else:
+            logger.info("sharepoint_extraction_disabled_by_config")
 
         # ─────────────────────────────────────────────────
         # 9. Teams (members, owners, guests, channels, apps)
         # ─────────────────────────────────────────────────
-        try:
-            if 'graph_token' in dir():
-                from src.extractors.sharepoint.teams import TeamsPermissionsExtractor
-                teams_ext = TeamsPermissionsExtractor(self.settings.tenant_id, graph_token, snapshot_id)
-                teams_result = await teams_ext.extract()
-                results["teams"] = {"count": teams_result.record_count, "errors": teams_result.errors}
-        except Exception as e:
-            results["teams"] = {"error": str(e)}
-            logger.warning("teams_extraction_skipped", error=str(e))
+        if self.settings.extract_teams:
+            try:
+                if 'graph_token' in locals() or 'graph_token' in globals():
+                    from src.extractors.sharepoint.teams import TeamsPermissionsExtractor
+                    teams_ext = TeamsPermissionsExtractor(self.settings.tenant_id, graph_token, snapshot_id)
+                    teams_result = await teams_ext.extract()
+                    self._add_result(results, "teams", teams_result)
+            except Exception as e:
+                results["teams"] = {"error": str(e)}
+                logger.warning("teams_extraction_skipped", error=str(e))
+        else:
+            logger.info("teams_extraction_disabled_by_config")
 
         # ─────────────────────────────────────────────────
         # 10. Analysis Services / PBI Premium XMLA (roles, RLS, members)
         # ─────────────────────────────────────────────────
-        if getattr(self.settings, "aas_servers", None):
-            for server_url in self.settings.aas_servers:
-                try:
-                    aas_token = msal_client.get_token(["https://analysis.windows.net/powerbi/api/.default"])
-                    from src.extractors.aas.models import AnalysisServicesExtractor
-                    aas_ext = AnalysisServicesExtractor(server_url, aas_token, self.settings.tenant_id, snapshot_id)
-                    aas_result = await aas_ext.extract()
-                    results.setdefault("analysis_services", {"count": 0, "errors": []})
-                    results["analysis_services"]["count"] += aas_result.record_count
-                    results["analysis_services"]["errors"].extend(aas_result.errors)
-                except Exception as e:
-                    results.setdefault("analysis_services", {"errors": []})
-                    results["analysis_services"]["errors"].append(str(e))
+        if self.settings.extract_aas:
+            if getattr(self.settings, "aas_servers", None):
+                for server_url in self.settings.aas_servers:
+                    try:
+                        aas_token = msal_client.get_token(["https://analysis.windows.net/powerbi/api/.default"])
+                        from src.extractors.aas.models import AnalysisServicesExtractor
+                        aas_ext = AnalysisServicesExtractor(server_url, aas_token, self.settings.tenant_id, snapshot_id)
+                        aas_result = await aas_ext.extract()
+                        self._append_result(results, "analysis_services", aas_result)
+                    except Exception as e:
+                        results.setdefault("analysis_services", {"errors": []})
+                        results["analysis_services"]["errors"].append(str(e))
+        else:
+            logger.info("aas_extraction_disabled_by_config")
 
         # ─────────────────────────────────────────────────
         # 11. Networking (NSGs, private endpoints, VNet service endpoints)
         # ─────────────────────────────────────────────────
-        for sub_id in subscription_ids:
-            try:
-                from src.extractors.networking.access import NetworkAccessExtractor
-                net_ext = NetworkAccessExtractor(credential, self.settings.tenant_id, snapshot_id)
-                net_result = net_ext.extract(sub_id)
-                results.setdefault("networking", {"count": 0, "errors": []})
-                results["networking"]["count"] += net_result.record_count
-                results["networking"]["errors"].extend(net_result.errors)
-            except Exception as e:
-                results.setdefault("networking", {"errors": []})
-                results["networking"]["errors"].append(str(e))
+        if self.settings.extract_networking:
+            for sub_id in subscription_ids:
+                try:
+                    from src.extractors.networking.access import NetworkAccessExtractor
+                    net_ext = NetworkAccessExtractor(credential, self.settings.tenant_id, snapshot_id)
+                    net_result = net_ext.extract(sub_id)
+                    self._append_result(results, "networking", net_result)
+                except Exception as e:
+                    results.setdefault("networking", {"errors": []})
+                    results["networking"]["errors"].append(str(e))
+        else:
+            logger.info("networking_extraction_disabled_by_config")
 
         # ─────────────────────────────────────────────────
         # 12. DevOps (projects, repos, pipelines)
         # ─────────────────────────────────────────────────
-        if getattr(self.settings, "devops_org", None) and self.settings.devops_pat.get_secret_value():
-            try:
-                from src.extractors.devops.projects import DevOpsExtractor
-                devops_ext = DevOpsExtractor(
-                    org_name=self.settings.devops_org,
-                    pat=self.settings.devops_pat.get_secret_value(),
-                    tenant_id=self.settings.tenant_id,
-                    snapshot_id=snapshot_id,
-                )
-                devops_result = await devops_ext.extract()
-                results["devops"] = {"count": devops_result.record_count, "errors": devops_result.errors}
-            except Exception as e:
-                results["devops"] = {"error": str(e)}
-                logger.warning("devops_extraction_skipped", error=str(e))
+        if self.settings.extract_devops:
+            if getattr(self.settings, "devops_org", None) and self.settings.devops_pat.get_secret_value():
+                try:
+                    from src.extractors.devops.projects import DevOpsExtractor
+                    devops_ext = DevOpsExtractor(
+                        org_name=self.settings.devops_org,
+                        pat=self.settings.devops_pat.get_secret_value(),
+                        tenant_id=self.settings.tenant_id,
+                        snapshot_id=snapshot_id,
+                    )
+                    devops_result = await devops_ext.extract()
+                    self._add_result(results, "devops", devops_result)
+                except Exception as e:
+                    results["devops"] = {"error": str(e)}
+                    logger.warning("devops_extraction_skipped", error=str(e))
+        else:
+            logger.info("devops_extraction_disabled_by_config")
 
         return results
+
+    def _add_result(self, results: dict[str, Any], name: str, result: Any) -> None:
+        results[name] = {
+            "records": getattr(result, "records", []),
+            "count": getattr(result, "record_count", 0),
+            "errors": getattr(result, "errors", []),
+            "duration": getattr(result, "duration_seconds", 0.0),
+        }
+
+    def _append_result(self, results: dict[str, Any], name: str, result: Any) -> None:
+        results.setdefault(name, {"count": 0, "errors": [], "records": []})
+        results[name]["count"] += getattr(result, "record_count", 0)
+        results[name]["errors"].extend(getattr(result, "errors", []))
+        results[name]["records"].extend(getattr(result, "records", []))
 
     def _load_to_database(
         self, session: Any, extract_results: dict[str, Any], snapshot_id: int
     ) -> dict[str, int]:
         """Load extracted data into DuckDB tables."""
+        from src.storage.schema import (
+            DimPrincipal, DimResource, DimRole, DimPermission,
+            FactMembership, FactRoleAssignment, FactPermissionAssignment,
+            FactRLSPolicy, FactDDMRule, FactSharingLink, FactNSGRule,
+            FactPrivateEndpoint, FactOneLakeRole, FactResourceHierarchy
+        )
+        from src.utils.id_generator import generate_surrogate_key
+
         counts: dict[str, int] = {}
         logger.info("loading_to_database", snapshot_id=snapshot_id)
-        # Loading logic would insert extracted records into DimPrincipal,
-        # DimResource, DimRole, FactMembership, FactRoleAssignment tables
-        # using SQLAlchemy bulk insert operations.
-        # Actual implementation depends on the record shapes from each extractor.
+
+        # 1. Load DimPrincipal (from users, groups, service_principals, sql_deep)
+        principals = []
+        if "users" in extract_results and "records" in extract_results["users"]:
+            principals.extend(DataNormalizer.normalize_principals(
+                extract_results["users"]["records"], "entra", self.settings.tenant_id
+            ))
+        if "groups" in extract_results and "records" in extract_results["groups"]:
+            principals.extend(DataNormalizer.normalize_principals(
+                extract_results["groups"]["records"], "entra", self.settings.tenant_id
+            ))
+        if "service_principals" in extract_results and "records" in extract_results["service_principals"]:
+            principals.extend(DataNormalizer.normalize_principals(
+                extract_results["service_principals"]["records"], "entra", self.settings.tenant_id
+            ))
+        if "sql_deep" in extract_results and "records" in extract_results["sql_deep"]:
+            for rec in extract_results["sql_deep"]["records"]:
+                if "principals" in rec:
+                    principals.extend(DataNormalizer.normalize_principals(
+                        rec["principals"], "sql", self.settings.tenant_id
+                    ))
+
+        if principals:
+            seen_principals = {}
+            for p in principals:
+                seen_principals[p["principal_id"]] = p
+            session.bulk_insert_mappings(DimPrincipal, list(seen_principals.values()))
+            counts["dim_principal"] = len(seen_principals)
+            logger.info("loaded_principals", count=len(seen_principals))
+
+        # 2. Load FactMembership (from memberships, teams)
+        memberships = []
+        if "memberships" in extract_results and "records" in extract_results["memberships"]:
+            memberships.extend(extract_results["memberships"]["records"])
+        if "teams" in extract_results and "records" in extract_results["teams"]:
+            for rec in extract_results["teams"]["records"]:
+                if "assignments" in rec:
+                    memberships.extend(rec["assignments"])
+
+        if memberships:
+            seen_memberships = {}
+            for m in memberships:
+                key = (m["member_id"], m["parent_id"], m["snapshot_id"])
+                seen_memberships[key] = m
+            session.bulk_insert_mappings(FactMembership, list(seen_memberships.values()))
+            counts["fact_membership"] = len(seen_memberships)
+            logger.info("loaded_memberships", count=len(seen_memberships))
+
+        # 3. Load DimResource
+        resources = []
+        if "subscriptions" in extract_results and "records" in extract_results["subscriptions"]:
+            for rec in extract_results["subscriptions"]["records"]:
+                if "resources" in rec:
+                    resources.extend(DataNormalizer.normalize_resources(
+                        rec["resources"], "azure", self.settings.tenant_id
+                    ))
+        if "management_groups" in extract_results and "records" in extract_results["management_groups"]:
+            for rec in extract_results["management_groups"]["records"]:
+                if "resources" in rec:
+                    resources.extend(DataNormalizer.normalize_resources(
+                        rec["resources"], "azure", self.settings.tenant_id
+                    ))
+        if "resource_graph" in extract_results and "records" in extract_results["resource_graph"]:
+            resources.extend(DataNormalizer.normalize_resources(
+                extract_results["resource_graph"]["records"], "azure", self.settings.tenant_id
+            ))
+        for key in ["sql_arm", "keyvault", "storage_accounts", "containers", "cosmosdb", "fabric_workspaces", "pbi_resources"]:
+            if key in extract_results and "records" in extract_results[key]:
+                resources.extend(DataNormalizer.normalize_resources(
+                    extract_results[key]["records"], "azure", self.settings.tenant_id
+                ))
+        if "sharepoint" in extract_results and "records" in extract_results["sharepoint"]:
+            for rec in extract_results["sharepoint"]["records"]:
+                if "resources" in rec:
+                    resources.extend(DataNormalizer.normalize_resources(
+                        rec["resources"], "sharepoint", self.settings.tenant_id
+                    ))
+        if "teams" in extract_results and "records" in extract_results["teams"]:
+            for rec in extract_results["teams"]["records"]:
+                if "resources" in rec:
+                    resources.extend(DataNormalizer.normalize_resources(
+                        rec["resources"], "teams", self.settings.tenant_id
+                    ))
+        if "devops" in extract_results and "records" in extract_results["devops"]:
+            for rec in extract_results["devops"]["records"]:
+                if "resources" in rec:
+                    resources.extend(DataNormalizer.normalize_resources(
+                        rec["resources"], "devops", self.settings.tenant_id
+                    ))
+        if "sql_deep" in extract_results and "records" in extract_results["sql_deep"]:
+            for rec in extract_results["sql_deep"]["records"]:
+                if "resources" in rec:
+                    resources.extend(DataNormalizer.normalize_resources(
+                        rec["resources"], "sql", self.settings.tenant_id
+                    ))
+
+        if resources:
+            seen_resources = {}
+            for r in resources:
+                seen_resources[r["resource_id"]] = r
+            session.bulk_insert_mappings(DimResource, list(seen_resources.values()))
+            counts["dim_resource"] = len(seen_resources)
+            logger.info("loaded_resources", count=len(seen_resources))
+
+        # 4. Load FactResourceHierarchy
+        hierarchies = []
+        if "subscriptions" in extract_results and "records" in extract_results["subscriptions"]:
+            for rec in extract_results["subscriptions"]["records"]:
+                if "hierarchy" in rec:
+                    hierarchies.extend(rec["hierarchy"])
+        if "management_groups" in extract_results and "records" in extract_results["management_groups"]:
+            for rec in extract_results["management_groups"]["records"]:
+                if "hierarchy" in rec:
+                    hierarchies.extend(rec["hierarchy"])
+        if hierarchies:
+            seen_h = {}
+            for h in hierarchies:
+                key = (h["parent_resource_id"], h["child_resource_id"], h["snapshot_id"])
+                seen_h[key] = h
+            session.bulk_insert_mappings(FactResourceHierarchy, list(seen_h.values()))
+            counts["fact_resource_hierarchy"] = len(seen_h)
+            logger.info("loaded_resource_hierarchies", count=len(seen_h))
+
+        # 5. Load DimRole
+        roles = []
+        if "directory_roles" in extract_results and "records" in extract_results["directory_roles"]:
+            roles.extend([r for r in extract_results["directory_roles"]["records"] if r.get("_record_type") == "role_definition"])
+        if "role_definitions" in extract_results and "records" in extract_results["role_definitions"]:
+            roles.extend(extract_results["role_definitions"]["records"])
+        if "analysis_services" in extract_results and "records" in extract_results["analysis_services"]:
+            roles.extend([r for r in extract_results["analysis_services"]["records"] if r.get("_record_type") == "role_definition"])
+
+        if roles:
+            seen_roles = {}
+            for r in roles:
+                cleaned_role = {k: v for k, v in r.items() if k != "_record_type"}
+                seen_roles[cleaned_role["role_id"]] = cleaned_role
+            session.bulk_insert_mappings(DimRole, list(seen_roles.values()))
+            counts["dim_role"] = len(seen_roles)
+            logger.info("loaded_roles", count=len(seen_roles))
+
+        # 6. Load FactRoleAssignment
+        assignments = []
+        if "directory_roles" in extract_results and "records" in extract_results["directory_roles"]:
+            assignments.extend([r for r in extract_results["directory_roles"]["records"] if r.get("_record_type") == "role_assignment"])
+        for key in ["role_assignments", "keyvault_deep", "acls", "cosmosdb", "fabric_item_permissions", "pbi_deep_permissions"]:
+            if key in extract_results and "records" in extract_results[key]:
+                assignments.extend(extract_results[key]["records"])
+        if "sharepoint" in extract_results and "records" in extract_results["sharepoint"]:
+            for rec in extract_results["sharepoint"]["records"]:
+                if "assignments" in rec:
+                    assignments.extend(rec["assignments"])
+        if "analysis_services" in extract_results and "records" in extract_results["analysis_services"]:
+            assignments.extend([r for r in extract_results["analysis_services"]["records"] if r.get("_record_type") == "role_assignment"])
+        if "devops" in extract_results and "records" in extract_results["devops"]:
+            for rec in extract_results["devops"]["records"]:
+                if "assignments" in rec:
+                    assignments.extend(rec["assignments"])
+        if "sql_deep" in extract_results and "records" in extract_results["sql_deep"]:
+            for rec in extract_results["sql_deep"]["records"]:
+                if "role_assignments" in rec:
+                    assignments.extend(rec["role_assignments"])
+
+        if assignments:
+            normalized_assignments = DataNormalizer.normalize_role_assignments(assignments, "azure")
+            seen_assign = {}
+            for a in normalized_assignments:
+                a["snapshot_id"] = snapshot_id
+                seen_assign[a["assignment_id"]] = a
+            session.bulk_insert_mappings(FactRoleAssignment, list(seen_assign.values()))
+            counts["fact_role_assignment"] = len(seen_assign)
+            logger.info("loaded_role_assignments", count=len(seen_assign))
+
+        # 7. Load FactPermissionAssignment
+        permission_assigns = []
+        if "sql_deep" in extract_results and "records" in extract_results["sql_deep"]:
+            for rec in extract_results["sql_deep"]["records"]:
+                if "permission_assignments" in rec:
+                    permission_assigns.extend(rec["permission_assignments"])
+        if permission_assigns:
+            seen_pa = {}
+            for pa in permission_assigns:
+                pa["snapshot_id"] = snapshot_id
+                if "permission_assignment_id" not in pa:
+                    pa["permission_assignment_id"] = generate_surrogate_key("sql_perm", f"{pa['principal_id']}:{pa['resource_id']}:{pa['permission_id']}")
+                seen_pa[pa["permission_assignment_id"]] = pa
+            session.bulk_insert_mappings(FactPermissionAssignment, list(seen_pa.values()))
+            counts["fact_permission_assignment"] = len(seen_pa)
+            logger.info("loaded_permission_assignments", count=len(seen_pa))
+
+        # 8. Load FactRLSPolicy
+        rls_policies = []
+        if "sql_deep" in extract_results and "records" in extract_results["sql_deep"]:
+            for rec in extract_results["sql_deep"]["records"]:
+                if "rls_policies" in rec:
+                    rls_policies.extend(rec["rls_policies"])
+        if rls_policies:
+            norm_rls = DataNormalizer.normalize_rls_policies(rls_policies, "sql")
+            seen_rls = {}
+            for r in norm_rls:
+                r["snapshot_id"] = snapshot_id
+                seen_rls[r["rls_id"]] = r
+            session.bulk_insert_mappings(FactRLSPolicy, list(seen_rls.values()))
+            counts["fact_rls_policy"] = len(seen_rls)
+            logger.info("loaded_rls_policies", count=len(seen_rls))
+
+        # 9. Load FactDDMRule
+        ddm_rules = []
+        if "sql_deep" in extract_results and "records" in extract_results["sql_deep"]:
+            for rec in extract_results["sql_deep"]["records"]:
+                if "ddm_rules" in rec:
+                    ddm_rules.extend(rec["ddm_rules"])
+        if ddm_rules:
+            norm_ddm = DataNormalizer.normalize_ddm_rules(ddm_rules)
+            seen_ddm = {}
+            for d in norm_ddm:
+                d["snapshot_id"] = snapshot_id
+                seen_ddm[d["ddm_id"]] = d
+            session.bulk_insert_mappings(FactDDMRule, list(seen_ddm.values()))
+            counts["fact_ddm_rule"] = len(seen_ddm)
+            logger.info("loaded_ddm_rules", count=len(seen_ddm))
+
+        # 10. Load FactSharingLink
+        sharing_links = []
+        if "sharepoint" in extract_results and "records" in extract_results["sharepoint"]:
+            for rec in extract_results["sharepoint"]["records"]:
+                if "sharing_links" in rec:
+                    sharing_links.extend(rec["sharing_links"])
+        if sharing_links:
+            norm_links = DataNormalizer.normalize_sharing_links(sharing_links)
+            seen_links = {}
+            for l in norm_links:
+                l["snapshot_id"] = snapshot_id
+                seen_links[l["link_id"]] = l
+            session.bulk_insert_mappings(FactSharingLink, list(seen_links.values()))
+            counts["fact_sharing_link"] = len(seen_links)
+            logger.info("loaded_sharing_links", count=len(seen_links))
+
+        # 11. Load FactNSGRule
+        nsg_rules = []
+        if "networking" in extract_results and "records" in extract_results["networking"]:
+            for rec in extract_results["networking"]["records"]:
+                if "rules" in rec:
+                    nsg_rules.extend(rec["rules"])
+        if nsg_rules:
+            norm_nsg = DataNormalizer.normalize_nsg_rules(nsg_rules)
+            seen_nsg = {}
+            for n in norm_nsg:
+                n["snapshot_id"] = snapshot_id
+                seen_nsg[n["rule_id"]] = n
+            session.bulk_insert_mappings(FactNSGRule, list(seen_nsg.values()))
+            counts["fact_nsg_rule"] = len(seen_nsg)
+            logger.info("loaded_nsg_rules", count=len(seen_nsg))
+
+        # 12. Load FactPrivateEndpoint
+        pe_endpoints = []
+        if "networking" in extract_results and "records" in extract_results["networking"]:
+            for rec in extract_results["networking"]["records"]:
+                if "endpoints" in rec:
+                    pe_endpoints.extend(rec["endpoints"])
+        if pe_endpoints:
+            norm_pe = DataNormalizer.normalize_private_endpoints(pe_endpoints)
+            seen_pe = {}
+            for p in norm_pe:
+                p["snapshot_id"] = snapshot_id
+                seen_pe[p["pe_id"]] = p
+            session.bulk_insert_mappings(FactPrivateEndpoint, list(seen_pe.values()))
+            counts["fact_private_endpoint"] = len(seen_pe)
+            logger.info("loaded_private_endpoints", count=len(seen_pe))
+
         return counts
 
     def _export_to_parquet(self, snapshot_id: int) -> None:

@@ -87,6 +87,34 @@ class EAIPSettings(BaseSettings):
         default_factory=list,
         description="List of AAS/PBI XMLA endpoint URLs.",
     )
+    extract_entra: bool = Field(
+        default=True,
+        description="Enable or disable the Entra ID extractor.",
+    )
+    extract_keyvault: bool = Field(
+        default=True,
+        description="Enable or disable the Key Vault extractor.",
+    )
+    extract_storage: bool = Field(
+        default=True,
+        description="Enable or disable the Storage account extractor.",
+    )
+    extract_sql: bool = Field(
+        default=True,
+        description="Enable or disable the SQL Server extractor (both ARM and data-plane).",
+    )
+    extract_fabric: bool = Field(
+        default=True,
+        description="Enable or disable the Fabric/Power BI extractor.",
+    )
+    extract_devops: bool = Field(
+        default=True,
+        description="Enable or disable the DevOps extractor.",
+    )
+    extract_aas: bool = Field(
+        default=True,
+        description="Enable or disable the Analysis Services XMLA extractor.",
+    )
     extract_sharepoint: bool = Field(
         default=True,
         description="Enable or disable the SharePoint extractor.",
