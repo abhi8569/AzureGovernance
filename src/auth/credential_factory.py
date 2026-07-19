@@ -60,17 +60,11 @@ def get_credential(settings: EAIPSettings) -> TokenCredential:
             client_id=settings.client_id,
         )
 
-    # Mode 3: No app registration — use DefaultAzureCredential
-    # This chains: Environment → Managed Identity → Azure CLI → Azure PowerShell → Interactive
-    logger.info("auth_mode", mode="default_credential (az login / managed identity)")
+    # Mode 3: No app registration — use Azure CLI credential (az login session)
+    logger.info("auth_mode", mode="azure_cli (az login)")
     if settings.tenant_id:
-        return DefaultAzureCredential(
-            tenant_id=settings.tenant_id,
-            exclude_interactive_browser_credential=False,
-        )
-    return DefaultAzureCredential(
-        exclude_interactive_browser_credential=False,
-    )
+        return AzureCliCredential(tenant_id=settings.tenant_id)
+    return AzureCliCredential()
 
 
 def get_msal_client_id(settings: EAIPSettings) -> str:
