@@ -53,15 +53,13 @@ class DimResource(Base):
     resource_guid = Column(String(256), nullable=False, index=True)
     resource_type = Column(String(100), nullable=False)
     name = Column(String(256))
-    parent_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"))
+    parent_id = Column(BigInteger)
     subscription_id = Column(String(50))
     resource_group = Column(String(100))
     location = Column(String(50))
     tags = Column(Text)
     created_date = Column(DateTime)
     deleted_date = Column(DateTime)
-
-    parent = relationship("DimResource", remote_side=[resource_id])
 
 
 class DimRole(Base):
@@ -123,13 +121,13 @@ class FactMembership(Base):
         PrimaryKeyConstraint("member_id", "parent_id", "snapshot_id"),
     )
 
-    member_id = Column(BigInteger, ForeignKey("dim_principal.principal_id"), nullable=False)
-    parent_id = Column(BigInteger, ForeignKey("dim_principal.principal_id"), nullable=False)
+    member_id = Column(BigInteger, nullable=False)
+    parent_id = Column(BigInteger, nullable=False)
     membership_type = Column(String(50))
     source = Column(String(50))
     effective_from = Column(DateTime)
     effective_to = Column(DateTime)
-    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+    snapshot_id = Column(BigInteger, nullable=False)
 
 
 class FactMembershipClosure(Base):
@@ -153,10 +151,10 @@ class FactResourceHierarchy(Base):
         PrimaryKeyConstraint("parent_resource_id", "child_resource_id", "snapshot_id"),
     )
 
-    parent_resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
-    child_resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
+    parent_resource_id = Column(BigInteger, nullable=False)
+    child_resource_id = Column(BigInteger, nullable=False)
     relationship_type = Column(String(50))
-    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+    snapshot_id = Column(BigInteger, nullable=False)
 
 
 class FactResourceHierarchyClosure(Base):
@@ -178,16 +176,16 @@ class FactRoleAssignment(Base):
     __tablename__ = "fact_role_assignment"
 
     assignment_id = Column(BigInteger, primary_key=True, autoincrement=False)
-    principal_id = Column(BigInteger, ForeignKey("dim_principal.principal_id"), nullable=False)
-    role_id = Column(BigInteger, ForeignKey("dim_role.role_id"))
-    resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"))
+    principal_id = Column(BigInteger, nullable=False)
+    role_id = Column(BigInteger)
+    resource_id = Column(BigInteger)
     assignment_type = Column(String(50))
     start_date = Column(DateTime)
     end_date = Column(DateTime)
     granted_by_id = Column(BigInteger)
     inherited = Column(Boolean)
     source = Column(String(50))
-    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+    snapshot_id = Column(BigInteger, nullable=False)
 
 
 class FactPermissionAssignment(Base):
@@ -195,14 +193,14 @@ class FactPermissionAssignment(Base):
     __tablename__ = "fact_permission_assignment"
 
     permission_assignment_id = Column(BigInteger, primary_key=True, autoincrement=False)
-    principal_id = Column(BigInteger, ForeignKey("dim_principal.principal_id"), nullable=False)
-    resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
-    permission_id = Column(BigInteger, ForeignKey("dim_permission.permission_id"), nullable=False)
+    principal_id = Column(BigInteger, nullable=False)
+    resource_id = Column(BigInteger, nullable=False)
+    permission_id = Column(BigInteger, nullable=False)
     permission_state = Column(String(20), nullable=False)
     grantor_id = Column(BigInteger)
     inherited = Column(Boolean, default=False)
     source = Column(String(50))
-    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+    snapshot_id = Column(BigInteger, nullable=False)
 
 
 class FactEffectivePermission(Base):
@@ -210,14 +208,14 @@ class FactEffectivePermission(Base):
     __tablename__ = "fact_effective_permission"
 
     effective_id = Column(BigInteger, primary_key=True, autoincrement=False)
-    principal_id = Column(BigInteger, ForeignKey("dim_principal.principal_id"), nullable=False)
-    resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
-    permission_id = Column(BigInteger, ForeignKey("dim_permission.permission_id"), nullable=False)
-    source_assignment_id = Column(BigInteger, ForeignKey("fact_role_assignment.assignment_id"), nullable=False)
+    principal_id = Column(BigInteger, nullable=False)
+    resource_id = Column(BigInteger, nullable=False)
+    permission_id = Column(BigInteger, nullable=False)
+    source_assignment_id = Column(BigInteger, nullable=False)
     depth = Column(Integer, nullable=False)
     inheritance_path = Column(Text)
     calculated_on = Column(DateTime)
-    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+    snapshot_id = Column(BigInteger, nullable=False)
 
 
 class FactAccessPath(Base):
@@ -225,12 +223,12 @@ class FactAccessPath(Base):
     __tablename__ = "fact_access_path"
 
     path_id = Column(BigInteger, primary_key=True, autoincrement=False)
-    effective_id = Column(BigInteger, ForeignKey("fact_effective_permission.effective_id"), nullable=False)
+    effective_id = Column(BigInteger, nullable=False)
     step_order = Column(Integer, nullable=False)
     node_id = Column(BigInteger, nullable=False)
     node_type = Column(String(50))
     node_name = Column(String(256))
-    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+    snapshot_id = Column(BigInteger, nullable=False)
 
 
 class FactRLSPolicy(Base):
@@ -238,7 +236,7 @@ class FactRLSPolicy(Base):
     __tablename__ = "fact_rls_policy"
 
     rls_id = Column(BigInteger, primary_key=True, autoincrement=False)
-    resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
+    resource_id = Column(BigInteger, nullable=False)
     database = Column(String(256), nullable=False)
     policy_name = Column(String(256), nullable=False)
     is_enabled = Column(Boolean)
@@ -249,7 +247,7 @@ class FactRLSPolicy(Base):
     filter_function_definition = Column(Text)
     role_name = Column(String(256))
     model_permission = Column(String(50))
-    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+    snapshot_id = Column(BigInteger, nullable=False)
 
 
 class FactDDMRule(Base):
@@ -257,12 +255,12 @@ class FactDDMRule(Base):
     __tablename__ = "fact_ddm_rule"
 
     ddm_id = Column(BigInteger, primary_key=True, autoincrement=False)
-    resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
+    resource_id = Column(BigInteger, nullable=False)
     database = Column(String(256), nullable=False)
     table_name = Column(String(256), nullable=False)
     column_name = Column(String(256), nullable=False)
     masking_function = Column(String(256))
-    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+    snapshot_id = Column(BigInteger, nullable=False)
 
 
 class FactSharingLink(Base):
@@ -277,7 +275,7 @@ class FactSharingLink(Base):
     link_scope = Column(String(50))
     link_url = Column(Text)
     created_by = Column(Text)
-    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+    snapshot_id = Column(BigInteger, nullable=False)
 
 
 class FactNSGRule(Base):
@@ -285,7 +283,7 @@ class FactNSGRule(Base):
     __tablename__ = "fact_nsg_rule"
 
     rule_id = Column(BigInteger, primary_key=True, autoincrement=False)
-    nsg_resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
+    nsg_resource_id = Column(BigInteger, nullable=False)
     nsg_name = Column(String(256))
     rule_name = Column(String(256), nullable=False)
     priority = Column(Integer)
@@ -297,7 +295,7 @@ class FactNSGRule(Base):
     destination_address = Column(String(256))
     destination_port = Column(String(256))
     description = Column(String(512))
-    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+    snapshot_id = Column(BigInteger, nullable=False)
 
 
 class FactPrivateEndpoint(Base):
@@ -305,14 +303,14 @@ class FactPrivateEndpoint(Base):
     __tablename__ = "fact_private_endpoint"
 
     pe_id = Column(BigInteger, primary_key=True, autoincrement=False)
-    resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
+    resource_id = Column(BigInteger, nullable=False)
     name = Column(String(256))
     location = Column(String(50))
     subnet_id = Column(String(256))
     target_resource = Column(Text)
     group_ids = Column(Text)
     connection_status = Column(String(50))
-    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+    snapshot_id = Column(BigInteger, nullable=False)
 
 
 class FactOneLakeRole(Base):
@@ -328,4 +326,4 @@ class FactOneLakeRole(Base):
     role_definition_id = Column(String(256))
     decision_rules = Column(Text)
     members = Column(Text)
-    snapshot_id = Column(BigInteger, ForeignKey("dim_snapshot.snapshot_id"), nullable=False)
+    snapshot_id = Column(BigInteger, nullable=False)
