@@ -20,7 +20,7 @@ import structlog
 
 from config.settings import get_settings
 from src.auth.msal_client import MSALClient
-from src.auth.credential_factory import get_credential
+from src.auth.credential_factory import get_credential, get_msal_client_id
 from src.etl.closure import ClosureComputer
 from src.etl.effective_permissions import EffectivePermissionResolver
 from src.etl.access_paths import AccessPathBuilder
@@ -201,7 +201,7 @@ class Pipeline:
             # Build auth clients
             msal_client = MSALClient(
                 tenant_id=self.settings.tenant_id,
-                client_id=self.settings.client_id,
+                client_id=get_msal_client_id(self.settings),
                 client_secret=self.settings.client_secret.get_secret_value(),
             )
             credential = get_credential(self.settings)
@@ -284,7 +284,7 @@ class Pipeline:
         # Get auth tokens
         msal_client = MSALClient(
             tenant_id=self.settings.tenant_id,
-            client_id=self.settings.client_id,
+            client_id=get_msal_client_id(self.settings),
             client_secret=self.settings.client_secret.get_secret_value(),
         )
 
