@@ -57,7 +57,7 @@ class AutoLoginAzureCliCredential:
 
                 # Verify if az is installed
                 try:
-                    subprocess.run(["az", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                    subprocess.run(["az", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True, check=True)
                 except Exception:
                     raise RuntimeError(
                         "Azure CLI (az) is not installed on this machine.\n"
@@ -70,7 +70,7 @@ class AutoLoginAzureCliCredential:
 
                 try:
                     # Run az login interactively (opens browser)
-                    subprocess.run(cmd, check=True)
+                    subprocess.run(cmd, shell=True, check=True)
                     # Recreate credential with the active session
                     self._credential = AzureCliCredential(tenant_id=self.tenant_id) if self.tenant_id else AzureCliCredential()
                     # Retry token acquisition

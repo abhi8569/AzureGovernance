@@ -48,8 +48,7 @@ echo =====================================
 echo  Setup complete!
 echo =====================================
 echo.
-echo  Activate the venv:   .venv\Scripts\activate
-echo  Run tests:           python -m pytest tests/ -v
-echo  Run scan:            python -m src.orchestrator.pipeline --scan-subscription --subscription-ids YOUR-SUB-ID
+echo  Run tests:           test.bat
+echo  Run scan:            run.bat --scan-subscription --subscription-ids YOUR-SUB-ID
 echo.
 pause
