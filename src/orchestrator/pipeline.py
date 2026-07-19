@@ -199,12 +199,13 @@ class Pipeline:
             summary["snapshot_id"] = snapshot_id
 
             # Build auth clients
+            credential = get_credential(self.settings)
             msal_client = MSALClient(
                 tenant_id=self.settings.tenant_id,
-                client_id=get_msal_client_id(self.settings),
+                client_id=self.settings.client_id,
                 client_secret=self.settings.client_secret.get_secret_value(),
+                credential=credential,
             )
-            credential = get_credential(self.settings)
 
             # Run the subscription scanner
             from src.orchestrator.subscription_scanner import SubscriptionScanner
@@ -282,13 +283,13 @@ class Pipeline:
         results: dict[str, Any] = {}
 
         # Get auth tokens
+        credential = get_credential(self.settings)
         msal_client = MSALClient(
             tenant_id=self.settings.tenant_id,
-            client_id=get_msal_client_id(self.settings),
+            client_id=self.settings.client_id,
             client_secret=self.settings.client_secret.get_secret_value(),
+            credential=credential,
         )
-
-        credential = get_credential(self.settings)
 
         # ─────────────────────────────────────────────────
         # 1. Entra ID (users, groups, memberships, roles, SPs)

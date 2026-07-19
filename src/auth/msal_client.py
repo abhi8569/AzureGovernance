@@ -26,6 +26,7 @@ class MSALClient:
         client_id: str,
         client_secret: str = "",
         cache_path: str = DEFAULT_CACHE_PATH,
+        credential: TokenCredential | None = None,
     ) -> None:
         """Initialise the MSAL client.
 
@@ -35,17 +36,28 @@ class MSALClient:
             client_secret: Client secret for confidential apps. Leave empty for
                 interactive/public client flows.
             cache_path: Path to the persistent token cache file.
+            credential: Optional backing Azure SDK TokenCredential to bypass MSAL.
         """
         self._tenant_id = tenant_id
         self._client_id = client_id
         self._client_secret = client_secret
         self._cache_path = cache_path
-        self._cache = load_cache(cache_path)
+        self._credential = credential
 
+        if not client_id and credential:
+            self._app = None
+            logger.info(
+                "msal_client_bypassed",
+                reason="using_backing_credential",
+                tenant_id=tenant_id,
+            )
+            return
+
+        self._cache = load_cache(cache_path)
         authority = f"https://login.microsoftonline.com/{tenant_id}"
 
         if client_secret:
-            self._app: msal.ClientApplication = msal.ConfidentialClientApplication(
+            self._app = msal.ConfidentialClientApplication(
                 client_id=client_id,
                 client_credential=client_secret,
                 authority=authority,
@@ -84,22 +96,16 @@ class MSALClient:
     # ------------------------------------------------------------------
 
     def get_token(self, scopes: list[str]) -> str:
-        """Acquire an access token, using the cache when possible.
-
-        Flow priority:
-        1. ``acquire_token_silent`` across all cached accounts.
-        2. If interactive mode → ``acquire_token_interactive``.
-        3. If client-credentials mode → ``acquire_token_for_client``.
-
-        Args:
-            scopes: OAuth2 scopes to request.
-
-        Returns:
-            The access token string.
-
-        Raises:
-            AuthenticationError: If token acquisition fails.
-        """
+        """Acquire an access token, using the cache when possible."""
+        # Bypass MSAL completely if we have a backing credential (e.g. AzureCliCredential)
+        if not self._client_id and self._credential:
+            logger.debug("token_acquisition_via_credential", scopes=scopes)
+            try:
+                token_obj = self._credential.get_token(*scopes)
+                return token_obj.token
+            except Exception as e:
+                logger.error("credential_token_acquisition_failed", scopes=scopes, error=str(e))
+                raise AuthenticationError(f"Failed to acquire token via backing credential: {e}")
         # 1. Try silent acquisition
         accounts = self._app.get_accounts()
         result = None
