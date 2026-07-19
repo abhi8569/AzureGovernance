@@ -99,12 +99,29 @@ class MSALClient:
         """Acquire an access token, using the cache when possible."""
         # Bypass MSAL completely if we have a backing credential (e.g. AzureCliCredential)
         if not self._client_id and self._credential:
-            logger.debug("token_acquisition_via_credential", scopes=scopes)
+            # Map multiple delegated Graph scopes or individual scopes to single .default scopes
+            # because AzureCliCredential only supports exactly one scope per token request.
+            resolved_scopes = []
+            for s in scopes:
+                if "graph.microsoft.com" in s or not (s.startswith("https://") or s.startswith("http://")):
+                    resolved_scopes.append("https://graph.microsoft.com/.default")
+                else:
+                    resolved_scopes.append(s)
+
+            # Get unique resolved scopes (usually they all point to the same resource)
+            unique_scopes = list(set(resolved_scopes))
+            target_scope = unique_scopes[0] if unique_scopes else "https://graph.microsoft.com/.default"
+
+            logger.debug(
+                "token_acquisition_via_credential",
+                requested=scopes,
+                resolved=target_scope,
+            )
             try:
-                token_obj = self._credential.get_token(*scopes)
+                token_obj = self._credential.get_token(target_scope)
                 return token_obj.token
             except Exception as e:
-                logger.error("credential_token_acquisition_failed", scopes=scopes, error=str(e))
+                logger.error("credential_token_acquisition_failed", scopes=scopes, resolved=target_scope, error=str(e))
                 raise AuthenticationError(f"Failed to acquire token via backing credential: {e}")
         # 1. Try silent acquisition
         accounts = self._app.get_accounts()

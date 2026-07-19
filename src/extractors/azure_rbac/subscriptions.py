@@ -41,7 +41,8 @@ class SubscriptionExtractor:
         Returns:
             ExtractResult with DimResource and FactResourceHierarchy records.
         """
-        from azure.mgmt.resource import SubscriptionClient, ResourceManagementClient
+        from azure.mgmt.resource import ResourceManagementClient
+        from azure.mgmt.resource.subscriptions import SubscriptionClient
 
         start_time = time.monotonic()
         resources: list[dict[str, Any]] = []

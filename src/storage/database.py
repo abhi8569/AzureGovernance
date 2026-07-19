@@ -90,16 +90,15 @@ class DatabaseManager:
             table_name: Name of the table to export.
             output_path: Path for the output Parquet file.
         """
+        from sqlalchemy import text
         output_dir = os.path.dirname(output_path)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
 
-        conn = self.get_connection()
-        try:
-            conn.execute(f"COPY {table_name} TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+        with self.get_engine().connect() as conn:
+            conn.execute(text(f"COPY {table_name} TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD)"))
+            conn.commit()
             logger.info("exported_to_parquet", table=table_name, path=output_path)
-        finally:
-            conn.close()
 
     def import_from_parquet(self, table_name: str, parquet_path: str) -> None:
         """Import data from a Parquet file into a table.
@@ -108,12 +107,11 @@ class DatabaseManager:
             table_name: Target table name.
             parquet_path: Path to the Parquet file.
         """
-        conn = self.get_connection()
-        try:
-            conn.execute(f"COPY {table_name} FROM '{parquet_path}' (FORMAT PARQUET)")
+        from sqlalchemy import text
+        with self.get_engine().connect() as conn:
+            conn.execute(text(f"COPY {table_name} FROM '{parquet_path}' (FORMAT PARQUET)"))
+            conn.commit()
             logger.info("imported_from_parquet", table=table_name, path=parquet_path)
-        finally:
-            conn.close()
 
     def execute_sql_file(self, file_path: str) -> None:
         """Read and execute a SQL file.
@@ -129,14 +127,13 @@ class DatabaseManager:
         # Split on semicolons and execute each statement
         statements = [s.strip() for s in sql_content.split(";") if s.strip()]
 
-        conn = self.get_connection()
-        try:
+        from sqlalchemy import text
+        with self.get_engine().connect() as conn:
             for stmt in statements:
                 if stmt and not stmt.startswith("--"):
-                    conn.execute(stmt)
+                    conn.execute(text(stmt))
+            conn.commit()
             logger.info("sql_file_executed", path=file_path, statements=len(statements))
-        finally:
-            conn.close()
 
     def __enter__(self) -> DatabaseManager:
         return self
