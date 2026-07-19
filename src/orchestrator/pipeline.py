@@ -672,9 +672,20 @@ class Pipeline:
             FactPrivateEndpoint, FactOneLakeRole, FactResourceHierarchy
         )
         from src.utils.id_generator import generate_surrogate_key
+        from sqlalchemy import select
 
         counts: dict[str, int] = {}
         logger.info("loading_to_database", snapshot_id=snapshot_id)
+
+        # 0. Fetch existing entity IDs to prevent foreign key constraint violations
+        existing_principal_ids = {r[0] for r in session.execute(select(DimPrincipal.principal_id)).all()}
+        existing_resource_ids = {r[0] for r in session.execute(select(DimResource.resource_id)).all()}
+        existing_role_ids = {r[0] for r in session.execute(select(DimRole.role_id)).all()}
+        existing_permission_ids = set()
+        try:
+            existing_permission_ids = {r[0] for r in session.execute(select(DimPermission.permission_id)).all()}
+        except Exception:
+            pass
 
         # 1. Load DimPrincipal (from users, groups, service_principals, sql_deep)
         principals = []
@@ -697,6 +708,7 @@ class Pipeline:
                         rec["principals"], "sql", self.settings.tenant_id
                     ))
 
+        valid_principal_ids = existing_principal_ids.copy()
         if principals:
             seen_principals = {}
             for p in principals:
@@ -704,6 +716,7 @@ class Pipeline:
             session.bulk_insert_mappings(DimPrincipal, list(seen_principals.values()))
             counts["dim_principal"] = len(seen_principals)
             logger.info("loaded_principals", count=len(seen_principals))
+            valid_principal_ids.update(seen_principals.keys())
 
         # 2. Load FactMembership (from memberships, teams)
         memberships = []
@@ -717,11 +730,14 @@ class Pipeline:
         if memberships:
             seen_memberships = {}
             for m in memberships:
-                key = (m["member_id"], m["parent_id"], m["snapshot_id"])
-                seen_memberships[key] = m
-            session.bulk_insert_mappings(FactMembership, list(seen_memberships.values()))
-            counts["fact_membership"] = len(seen_memberships)
-            logger.info("loaded_memberships", count=len(seen_memberships))
+                # Validate FK to DimPrincipal
+                if m["member_id"] in valid_principal_ids and m["parent_id"] in valid_principal_ids:
+                    key = (m["member_id"], m["parent_id"], m["snapshot_id"])
+                    seen_memberships[key] = m
+            if seen_memberships:
+                session.bulk_insert_mappings(FactMembership, list(seen_memberships.values()))
+                counts["fact_membership"] = len(seen_memberships)
+                logger.info("loaded_memberships", count=len(seen_memberships))
 
         # 3. Load DimResource
         resources = []
@@ -771,6 +787,7 @@ class Pipeline:
                         rec["resources"], "sql", self.settings.tenant_id
                     ))
 
+        valid_resource_ids = existing_resource_ids.copy()
         if resources:
             seen_resources = {}
             for r in resources:
@@ -778,6 +795,7 @@ class Pipeline:
             session.bulk_insert_mappings(DimResource, list(seen_resources.values()))
             counts["dim_resource"] = len(seen_resources)
             logger.info("loaded_resources", count=len(seen_resources))
+            valid_resource_ids.update(seen_resources.keys())
 
         # 4. Load FactResourceHierarchy
         hierarchies = []
@@ -792,11 +810,14 @@ class Pipeline:
         if hierarchies:
             seen_h = {}
             for h in hierarchies:
-                key = (h["parent_resource_id"], h["child_resource_id"], h["snapshot_id"])
-                seen_h[key] = h
-            session.bulk_insert_mappings(FactResourceHierarchy, list(seen_h.values()))
-            counts["fact_resource_hierarchy"] = len(seen_h)
-            logger.info("loaded_resource_hierarchies", count=len(seen_h))
+                # Validate FK to DimResource
+                if h["parent_resource_id"] in valid_resource_ids and h["child_resource_id"] in valid_resource_ids:
+                    key = (h["parent_resource_id"], h["child_resource_id"], h["snapshot_id"])
+                    seen_h[key] = h
+            if seen_h:
+                session.bulk_insert_mappings(FactResourceHierarchy, list(seen_h.values()))
+                counts["fact_resource_hierarchy"] = len(seen_h)
+                logger.info("loaded_resource_hierarchies", count=len(seen_h))
 
         # 5. Load DimRole
         roles = []
@@ -807,6 +828,7 @@ class Pipeline:
         if "analysis_services" in extract_results and "records" in extract_results["analysis_services"]:
             roles.extend([r for r in extract_results["analysis_services"]["records"] if r.get("_record_type") == "role_definition"])
 
+        valid_role_ids = existing_role_ids.copy()
         if roles:
             seen_roles = {}
             for r in roles:
@@ -815,6 +837,23 @@ class Pipeline:
             session.bulk_insert_mappings(DimRole, list(seen_roles.values()))
             counts["dim_role"] = len(seen_roles)
             logger.info("loaded_roles", count=len(seen_roles))
+            valid_role_ids.update(seen_roles.keys())
+
+        # 5.5. Load/Seed DimPermission to satisfy FK constraint on FactEffectivePermission.permission_id
+        valid_permission_ids = existing_permission_ids.copy()
+        permissions_to_insert = []
+        needed_permission_ids = {0} | valid_role_ids
+        for pid in needed_permission_ids:
+            if pid not in valid_permission_ids:
+                permissions_to_insert.append({
+                    "permission_id": pid,
+                    "permission_name": f"Permission or Role {pid}",
+                    "description": "Auto-generated to satisfy schema constraints",
+                    "permission_category": "AutoGenerated"
+                })
+        if permissions_to_insert:
+            session.bulk_insert_mappings(DimPermission, permissions_to_insert)
+            valid_permission_ids.update(needed_permission_ids)
 
         # 6. Load FactRoleAssignment
         assignments = []
@@ -843,10 +882,18 @@ class Pipeline:
             seen_assign = {}
             for a in normalized_assignments:
                 a["snapshot_id"] = snapshot_id
+                # Validate FK references
+                if a["principal_id"] not in valid_principal_ids:
+                    continue
+                if a.get("resource_id") and a["resource_id"] not in valid_resource_ids:
+                    continue
+                if a.get("role_id") and a["role_id"] not in valid_role_ids:
+                    continue
                 seen_assign[a["assignment_id"]] = a
-            session.bulk_insert_mappings(FactRoleAssignment, list(seen_assign.values()))
-            counts["fact_role_assignment"] = len(seen_assign)
-            logger.info("loaded_role_assignments", count=len(seen_assign))
+            if seen_assign:
+                session.bulk_insert_mappings(FactRoleAssignment, list(seen_assign.values()))
+                counts["fact_role_assignment"] = len(seen_assign)
+                logger.info("loaded_role_assignments", count=len(seen_assign))
 
         # 7. Load FactPermissionAssignment
         permission_assigns = []
@@ -860,10 +907,18 @@ class Pipeline:
                 pa["snapshot_id"] = snapshot_id
                 if "permission_assignment_id" not in pa:
                     pa["permission_assignment_id"] = generate_surrogate_key("sql_perm", f"{pa['principal_id']}:{pa['resource_id']}:{pa['permission_id']}")
+                # Validate FK references
+                if pa["principal_id"] not in valid_principal_ids:
+                    continue
+                if pa["resource_id"] not in valid_resource_ids:
+                    continue
+                if pa.get("permission_id") and pa["permission_id"] not in valid_permission_ids:
+                    continue
                 seen_pa[pa["permission_assignment_id"]] = pa
-            session.bulk_insert_mappings(FactPermissionAssignment, list(seen_pa.values()))
-            counts["fact_permission_assignment"] = len(seen_pa)
-            logger.info("loaded_permission_assignments", count=len(seen_pa))
+            if seen_pa:
+                session.bulk_insert_mappings(FactPermissionAssignment, list(seen_pa.values()))
+                counts["fact_permission_assignment"] = len(seen_pa)
+                logger.info("loaded_permission_assignments", count=len(seen_pa))
 
         # 8. Load FactRLSPolicy
         rls_policies = []
@@ -876,10 +931,14 @@ class Pipeline:
             seen_rls = {}
             for r in norm_rls:
                 r["snapshot_id"] = snapshot_id
+                # Validate FK to DimResource
+                if r["resource_id"] not in valid_resource_ids:
+                    continue
                 seen_rls[r["rls_id"]] = r
-            session.bulk_insert_mappings(FactRLSPolicy, list(seen_rls.values()))
-            counts["fact_rls_policy"] = len(seen_rls)
-            logger.info("loaded_rls_policies", count=len(seen_rls))
+            if seen_rls:
+                session.bulk_insert_mappings(FactRLSPolicy, list(seen_rls.values()))
+                counts["fact_rls_policy"] = len(seen_rls)
+                logger.info("loaded_rls_policies", count=len(seen_rls))
 
         # 9. Load FactDDMRule
         ddm_rules = []
@@ -892,10 +951,14 @@ class Pipeline:
             seen_ddm = {}
             for d in norm_ddm:
                 d["snapshot_id"] = snapshot_id
+                # Validate FK to DimResource
+                if d["resource_id"] not in valid_resource_ids:
+                    continue
                 seen_ddm[d["ddm_id"]] = d
-            session.bulk_insert_mappings(FactDDMRule, list(seen_ddm.values()))
-            counts["fact_ddm_rule"] = len(seen_ddm)
-            logger.info("loaded_ddm_rules", count=len(seen_ddm))
+            if seen_ddm:
+                session.bulk_insert_mappings(FactDDMRule, list(seen_ddm.values()))
+                counts["fact_ddm_rule"] = len(seen_ddm)
+                logger.info("loaded_ddm_rules", count=len(seen_ddm))
 
         # 10. Load FactSharingLink
         sharing_links = []
@@ -908,10 +971,14 @@ class Pipeline:
             seen_links = {}
             for l in norm_links:
                 l["snapshot_id"] = snapshot_id
+                # Validate FK to DimResource
+                if l["resource_id"] not in valid_resource_ids:
+                    continue
                 seen_links[l["link_id"]] = l
-            session.bulk_insert_mappings(FactSharingLink, list(seen_links.values()))
-            counts["fact_sharing_link"] = len(seen_links)
-            logger.info("loaded_sharing_links", count=len(seen_links))
+            if seen_links:
+                session.bulk_insert_mappings(FactSharingLink, list(seen_links.values()))
+                counts["fact_sharing_link"] = len(seen_links)
+                logger.info("loaded_sharing_links", count=len(seen_links))
 
         # 11. Load FactNSGRule
         nsg_rules = []
@@ -924,10 +991,14 @@ class Pipeline:
             seen_nsg = {}
             for n in norm_nsg:
                 n["snapshot_id"] = snapshot_id
+                # Validate FK to DimResource
+                if n["nsg_resource_id"] not in valid_resource_ids:
+                    continue
                 seen_nsg[n["rule_id"]] = n
-            session.bulk_insert_mappings(FactNSGRule, list(seen_nsg.values()))
-            counts["fact_nsg_rule"] = len(seen_nsg)
-            logger.info("loaded_nsg_rules", count=len(seen_nsg))
+            if seen_nsg:
+                session.bulk_insert_mappings(FactNSGRule, list(seen_nsg.values()))
+                counts["fact_nsg_rule"] = len(seen_nsg)
+                logger.info("loaded_nsg_rules", count=len(seen_nsg))
 
         # 12. Load FactPrivateEndpoint
         pe_endpoints = []
@@ -940,10 +1011,54 @@ class Pipeline:
             seen_pe = {}
             for p in norm_pe:
                 p["snapshot_id"] = snapshot_id
+                # Validate FK to DimResource
+                if p["resource_id"] not in valid_resource_ids:
+                    continue
                 seen_pe[p["pe_id"]] = p
-            session.bulk_insert_mappings(FactPrivateEndpoint, list(seen_pe.values()))
-            counts["fact_private_endpoint"] = len(seen_pe)
-            logger.info("loaded_private_endpoints", count=len(seen_pe))
+            if seen_pe:
+                session.bulk_insert_mappings(FactPrivateEndpoint, list(seen_pe.values()))
+                counts["fact_private_endpoint"] = len(seen_pe)
+                logger.info("loaded_private_endpoints", count=len(seen_pe))
+
+        # 10. Load FactSharingLink
+        sharing_links = []
+        if "sharepoint" in extract_results and "records" in extract_results["sharepoint"]:
+            for rec in extract_results["sharepoint"]["records"]:
+                if "sharing_links" in rec:
+                    sharing_links.extend(rec["sharing_links"])
+        if sharing_links:
+            norm_links = DataNormalizer.normalize_sharing_links(sharing_links)
+            seen_links = {}
+            for l in norm_links:
+                l["snapshot_id"] = snapshot_id
+                # Validate FK to DimResource
+                if l["resource_id"] not in valid_resource_ids:
+                    continue
+                seen_links[l["link_id"]] = l
+            if seen_links:
+                session.bulk_insert_mappings(FactSharingLink, list(seen_links.values()))
+                counts["fact_sharing_link"] = len(seen_links)
+                logger.info("loaded_sharing_links", count=len(seen_links))
+
+        # 11. Load FactNSGRule
+        nsg_rules = []
+        if "networking" in extract_results and "records" in extract_results["networking"]:
+            for rec in extract_results["networking"]["records"]:
+                if "rules" in rec:
+                    nsg_rules.extend(rec["rules"])
+        if nsg_rules:
+            norm_nsg = DataNormalizer.normalize_nsg_rules(nsg_rules)
+            seen_nsg = {}
+            for n in norm_nsg:
+                n["snapshot_id"] = snapshot_id
+                # Validate FK to DimResource
+                if n["nsg_resource_id"] not in valid_resource_ids:
+                    continue
+                seen_nsg[n["rule_id"]] = n
+            if seen_nsg:
+                session.bulk_insert_mappings(FactNSGRule, list(seen_nsg.values()))
+                counts["fact_nsg_rule"] = len(seen_nsg)
+                logger.info("loaded_nsg_rules", count=len(seen_nsg))
 
         return counts
 
