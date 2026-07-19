@@ -90,48 +90,56 @@ EAIP_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # OPTIONAL — leave empty for interactive SSO (browser popup)
 EAIP_CLIENT_SECRET=
 
-# OPTIONAL — SQL Server deep extraction
-EAIP_SQL_CONNECTIONS=["Driver={ODBC Driver 18 for SQL Server};Server=myserver.database.windows.net;Database=mydb;Authentication=ActiveDirectoryInteractive"]
-
 # OPTIONAL — Analysis Services / PBI Premium XMLA
 EAIP_AAS_SERVERS=["powerbi://api.powerbi.com/v1.0/myorg/MyWorkspace"]
 ```
 
+> **Note:** SQL Server deep extraction is automatic — no connection strings needed.
+> When SQL servers are found in your subscription, EAIP auto-connects via Azure AD SSO.
+
 ### 3. Run
+
+> **You do NOT need to activate the venv manually.** All scripts auto-activate it.
 
 #### 🚀 Subscription Scan (Recommended — easiest way to start)
 
 Just provide your subscription ID(s) and EAIP auto-discovers all resources and extracts everything:
 
 ```bash
-# Scan a single subscription — discovers SQL, Key Vault, Storage, Cosmos, NSGs, etc.
-python -m src.orchestrator.pipeline --scan-subscription --subscription-ids YOUR-SUB-GUID
+# Windows
+run.bat --scan-subscription --subscription-ids YOUR-SUB-GUID
+run.bat --scan-subscription --subscription-ids SUB-1 SUB-2 SUB-3
 
-# Scan multiple subscriptions at once
-python -m src.orchestrator.pipeline --scan-subscription --subscription-ids SUB-1 SUB-2 SUB-3
+# Linux / macOS / Git Bash
+./run.sh --scan-subscription --subscription-ids YOUR-SUB-GUID
 ```
 
 This mode:
 1. Queries **Azure Resource Graph** to discover every resource in the subscription
-2. Matches discovered resources to extractors (SQL → SQL deep extractor, Key Vault → KV extractor, etc.)
-3. Runs **Entra ID, Azure RBAC, Fabric/PBI, SharePoint, Teams, AAS** automatically
-4. Computes transitive closures and effective permissions
-5. Exports to DuckDB + Parquet
+2. **SQL deep extraction** — auto-discovers servers, connects via SSO, extracts users/roles/RLS/DDM
+3. Matches other resources to extractors (Key Vault, Cosmos, Storage, NSGs)
+4. Runs **Entra ID, Azure RBAC, Fabric/PBI, SharePoint, Teams, AAS** automatically
+5. Computes transitive closures and effective permissions
+6. Exports to DuckDB + Parquet
 
 #### Other Run Modes
 
 ```bash
-# Full pipeline (uses all configured sources — same as scan but reads from .env)
-python -m src.orchestrator.pipeline --full
+# Full pipeline
+run.bat --full
 
 # Extract only (no ETL processing)
-python -m src.orchestrator.pipeline --extract-only
+run.bat --extract-only
 
 # ETL only (process existing data from a previous extraction)
-python -m src.orchestrator.pipeline --etl-only
+run.bat --etl-only --snapshot-id 42
+```
 
-# ETL on a specific snapshot
-python -m src.orchestrator.pipeline --etl-only --snapshot-id 42
+#### Run Tests
+
+```bash
+test.bat              # All tests
+test.bat -k "test_sql" # Specific tests
 ```
 
 On first run, a **browser window opens** for interactive SSO authentication. Subsequent runs use cached tokens.
