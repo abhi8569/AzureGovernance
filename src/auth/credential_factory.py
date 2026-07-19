@@ -64,6 +64,12 @@ class AutoLoginAzureCliCredential:
                         "Please download and install it from: https://aka.ms/InstallAzureCli"
                     )
 
+                # Disable Windows WAM broker to force standard web browser login
+                try:
+                    subprocess.run(["az", "config", "set", "core.allow_broker=false"], shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+
                 cmd = ["az", "login"]
                 if self.tenant_id:
                     cmd.extend(["--tenant", self.tenant_id])
