@@ -90,7 +90,7 @@ class DimSnapshot(Base):
     """ETL snapshot metadata."""
     __tablename__ = "dim_snapshot"
 
-    snapshot_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    snapshot_id = Column(BigInteger, primary_key=True)
     snapshot_date = Column(Date, nullable=False)
     description = Column(String(200))
     created_at = Column(DateTime, server_default=func.now())

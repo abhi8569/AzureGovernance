@@ -13,7 +13,7 @@ import argparse
 import asyncio
 import sys
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 import structlog
@@ -62,7 +62,7 @@ class Pipeline:
             Summary dict with extraction counts and timing.
         """
         start_time = time.monotonic()
-        summary: dict[str, Any] = {"started_at": datetime.utcnow().isoformat()}
+        summary: dict[str, Any] = {"started_at": datetime.now(timezone.utc).isoformat()}
 
         # Initialize database schema
         self.db.initialize_schema()
@@ -116,7 +116,7 @@ class Pipeline:
 
         duration = time.monotonic() - start_time
         summary["duration_seconds"] = round(duration, 2)
-        summary["completed_at"] = datetime.utcnow().isoformat()
+        summary["completed_at"] = datetime.now(timezone.utc).isoformat()
 
         logger.info("pipeline_complete", duration=summary["duration_seconds"])
         return summary
@@ -181,7 +181,7 @@ class Pipeline:
         """
         start_time = time.monotonic()
         summary: dict[str, Any] = {
-            "started_at": datetime.utcnow().isoformat(),
+            "started_at": datetime.now(timezone.utc).isoformat(),
             "mode": "subscription_scan",
             "subscription_ids": subscription_ids,
         }
@@ -250,7 +250,7 @@ class Pipeline:
 
         duration = time.monotonic() - start_time
         summary["duration_seconds"] = round(duration, 2)
-        summary["completed_at"] = datetime.utcnow().isoformat()
+        summary["completed_at"] = datetime.now(timezone.utc).isoformat()
 
         logger.info(
             "subscription_scan_complete",

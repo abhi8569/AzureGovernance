@@ -1,7 +1,7 @@
 """Effective permission resolver - computes inherited permissions."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -85,7 +85,7 @@ class EffectivePermissionResolver:
 
         # Resolve effective permissions
         effective_records: list[dict[str, Any]] = []
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         for assignment in assignments:
             principal_id = assignment.principal_id
