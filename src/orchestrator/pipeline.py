@@ -797,6 +797,22 @@ class Pipeline:
             logger.info("loaded_resources", count=len(seen_resources))
             valid_resource_ids.update(seen_resources.keys())
 
+        # Seed a dummy resource with ID 0 to represent the Root/Tenant scope for global assignments
+        if 0 not in valid_resource_ids:
+            session.bulk_insert_mappings(DimResource, [{
+                "resource_id": 0,
+                "tenant_id": self.settings.tenant_id,
+                "resource_guid": "tenant-root",
+                "resource_type": "TenantRoot",
+                "name": "Tenant Root",
+                "parent_id": None,
+                "subscription_id": None,
+                "resource_group": None,
+                "location": "Global",
+                "tags": None
+            }])
+            valid_resource_ids.add(0)
+
         # 4. Load FactResourceHierarchy
         hierarchies = []
         if "subscriptions" in extract_results and "records" in extract_results["subscriptions"]:

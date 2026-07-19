@@ -138,8 +138,10 @@ def test_pipeline_load_to_database(db_session: Session, test_settings: EAIPSetti
     assert memberships[0].snapshot_id == snapshot_id
 
     resources = db_session.execute(select(DimResource)).scalars().all()
-    assert len(resources) == 1
-    assert resources[0].name == "kv-prod"
+    assert len(resources) == 2
+    resource_names = {r.name for r in resources}
+    assert "kv-prod" in resource_names
+    assert "Tenant Root" in resource_names
 
     assignments = db_session.execute(select(FactRoleAssignment)).scalars().all()
     assert len(assignments) == 1
