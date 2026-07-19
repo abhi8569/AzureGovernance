@@ -41,12 +41,19 @@ class SnapshotManager:
         Returns:
             The newly created ``snapshot_id``.
         """
+        # DuckDB doesn't support auto-increment, so we generate the ID manually
+        current_max = session.execute(
+            select(func.coalesce(func.max(DimSnapshot.snapshot_id), 0))
+        ).scalar()
+        next_id = current_max + 1
+
         snapshot = DimSnapshot(
+            snapshot_id=next_id,
             snapshot_date=date.today(),
             description=description or f"Snapshot {datetime.now(tz=timezone.utc).isoformat()}",
         )
         session.add(snapshot)
-        session.flush()  # assigns auto-increment PK
+        session.flush()
 
         logger.info(
             "snapshot_created",
