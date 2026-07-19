@@ -30,7 +30,7 @@ class DimPrincipal(Base):
     """Security principals: users, groups, service principals, managed identities."""
     __tablename__ = "dim_principal"
 
-    principal_id = Column(BigInteger, primary_key=True)
+    principal_id = Column(BigInteger, primary_key=True, autoincrement=False)
     tenant_id = Column(String(36), nullable=False)
     object_id = Column(String(36), nullable=False, index=True)
     principal_type = Column(String(50), nullable=False)
@@ -48,7 +48,7 @@ class DimResource(Base):
     """Azure and Microsoft service resources."""
     __tablename__ = "dim_resource"
 
-    resource_id = Column(BigInteger, primary_key=True)
+    resource_id = Column(BigInteger, primary_key=True, autoincrement=False)
     tenant_id = Column(String(36), nullable=False)
     resource_guid = Column(String(256), nullable=False, index=True)
     resource_type = Column(String(100), nullable=False)
@@ -68,7 +68,7 @@ class DimRole(Base):
     """Role definitions across platforms."""
     __tablename__ = "dim_role"
 
-    role_id = Column(BigInteger, primary_key=True)
+    role_id = Column(BigInteger, primary_key=True, autoincrement=False)
     role_name = Column(String(256))
     platform = Column(String(50))
     is_built_in = Column(Boolean)
@@ -80,7 +80,7 @@ class DimPermission(Base):
     """Granular permission definitions."""
     __tablename__ = "dim_permission"
 
-    permission_id = Column(BigInteger, primary_key=True)
+    permission_id = Column(BigInteger, primary_key=True, autoincrement=False)
     permission_name = Column(String(256))
     description = Column(String(512))
     permission_category = Column(String(100))
@@ -90,7 +90,7 @@ class DimSnapshot(Base):
     """ETL snapshot metadata."""
     __tablename__ = "dim_snapshot"
 
-    snapshot_id = Column(BigInteger, primary_key=True)
+    snapshot_id = Column(BigInteger, primary_key=True, autoincrement=False)
     snapshot_date = Column(Date, nullable=False)
     description = Column(String(200))
     created_at = Column(DateTime, server_default=func.now())
@@ -100,7 +100,7 @@ class DimTime(Base):
     """Calendar dimension for time-based analysis."""
     __tablename__ = "dim_time"
 
-    date_key = Column(Integer, primary_key=True)
+    date_key = Column(Integer, primary_key=True, autoincrement=False)
     full_date = Column(Date, nullable=False)
     year = Column(Integer)
     quarter = Column(Integer)
@@ -177,7 +177,7 @@ class FactRoleAssignment(Base):
     """Direct role and permission assignments."""
     __tablename__ = "fact_role_assignment"
 
-    assignment_id = Column(BigInteger, primary_key=True)
+    assignment_id = Column(BigInteger, primary_key=True, autoincrement=False)
     principal_id = Column(BigInteger, ForeignKey("dim_principal.principal_id"), nullable=False)
     role_id = Column(BigInteger, ForeignKey("dim_role.role_id"))
     resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"))
@@ -194,7 +194,7 @@ class FactPermissionAssignment(Base):
     """Raw permission grants (GRANT/DENY) for SQL/AAS/ACLs."""
     __tablename__ = "fact_permission_assignment"
 
-    permission_assignment_id = Column(BigInteger, primary_key=True)
+    permission_assignment_id = Column(BigInteger, primary_key=True, autoincrement=False)
     principal_id = Column(BigInteger, ForeignKey("dim_principal.principal_id"), nullable=False)
     resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
     permission_id = Column(BigInteger, ForeignKey("dim_permission.permission_id"), nullable=False)
@@ -209,7 +209,7 @@ class FactEffectivePermission(Base):
     """Computed effective permissions after inheritance resolution."""
     __tablename__ = "fact_effective_permission"
 
-    effective_id = Column(BigInteger, primary_key=True)
+    effective_id = Column(BigInteger, primary_key=True, autoincrement=False)
     principal_id = Column(BigInteger, ForeignKey("dim_principal.principal_id"), nullable=False)
     resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
     permission_id = Column(BigInteger, ForeignKey("dim_permission.permission_id"), nullable=False)
@@ -224,7 +224,7 @@ class FactAccessPath(Base):
     """Detailed access path steps for explainability."""
     __tablename__ = "fact_access_path"
 
-    path_id = Column(BigInteger, primary_key=True)
+    path_id = Column(BigInteger, primary_key=True, autoincrement=False)
     effective_id = Column(BigInteger, ForeignKey("fact_effective_permission.effective_id"), nullable=False)
     step_order = Column(Integer, nullable=False)
     node_id = Column(BigInteger, nullable=False)
@@ -237,7 +237,7 @@ class FactRLSPolicy(Base):
     """Row-Level Security policies extracted from SQL databases."""
     __tablename__ = "fact_rls_policy"
 
-    rls_id = Column(BigInteger, primary_key=True)
+    rls_id = Column(BigInteger, primary_key=True, autoincrement=False)
     resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
     database = Column(String(256), nullable=False)
     policy_name = Column(String(256), nullable=False)
@@ -256,7 +256,7 @@ class FactDDMRule(Base):
     """Dynamic Data Masking rules extracted from SQL databases."""
     __tablename__ = "fact_ddm_rule"
 
-    ddm_id = Column(BigInteger, primary_key=True)
+    ddm_id = Column(BigInteger, primary_key=True, autoincrement=False)
     resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
     database = Column(String(256), nullable=False)
     table_name = Column(String(256), nullable=False)
@@ -269,7 +269,7 @@ class FactSharingLink(Base):
     """SharePoint / OneDrive sharing links."""
     __tablename__ = "fact_sharing_link"
 
-    link_id = Column(BigInteger, primary_key=True)
+    link_id = Column(BigInteger, primary_key=True, autoincrement=False)
     item_name = Column(String(256))
     drive_id = Column(String(256))
     item_id = Column(String(256))
@@ -284,7 +284,7 @@ class FactNSGRule(Base):
     """Network Security Group rules."""
     __tablename__ = "fact_nsg_rule"
 
-    rule_id = Column(BigInteger, primary_key=True)
+    rule_id = Column(BigInteger, primary_key=True, autoincrement=False)
     nsg_resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
     nsg_name = Column(String(256))
     rule_name = Column(String(256), nullable=False)
@@ -304,7 +304,7 @@ class FactPrivateEndpoint(Base):
     """Azure Private Endpoint connections."""
     __tablename__ = "fact_private_endpoint"
 
-    pe_id = Column(BigInteger, primary_key=True)
+    pe_id = Column(BigInteger, primary_key=True, autoincrement=False)
     resource_id = Column(BigInteger, ForeignKey("dim_resource.resource_id"), nullable=False)
     name = Column(String(256))
     location = Column(String(50))
@@ -319,7 +319,7 @@ class FactOneLakeRole(Base):
     """OneLake workspace-level role assignments."""
     __tablename__ = "fact_onelake_role"
 
-    onelake_role_id = Column(BigInteger, primary_key=True)
+    onelake_role_id = Column(BigInteger, primary_key=True, autoincrement=False)
     workspace_id = Column(String(256))
     item_id = Column(String(256))
     item_type = Column(String(100))
