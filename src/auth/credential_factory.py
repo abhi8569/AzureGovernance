@@ -7,18 +7,18 @@ Supports three authentication modes (in priority order):
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import subprocess
+from typing import TYPE_CHECKING, Any
 
 from azure.identity import (
     AzureCliCredential,
     ClientSecretCredential,
-    DefaultAzureCredential,
     InteractiveBrowserCredential,
 )
 import structlog
 
 if TYPE_CHECKING:
-    from azure.core.credentials import TokenCredential
+    from azure.core.credentials import AccessToken, TokenCredential
     from msgraph import GraphServiceClient
     from config.settings import EAIPSettings
 
@@ -29,13 +29,65 @@ logger = structlog.get_logger(__name__)
 AZURE_CLI_CLIENT_ID = "04b07795-a72d-e811-80c3-00aa00394de7"
 
 
+class AutoLoginAzureCliCredential:
+    """Wrapper around AzureCliCredential that automatically runs 'az login' if needed."""
+
+    def __init__(self, tenant_id: str | None = None) -> None:
+        self.tenant_id = tenant_id
+        self._credential = AzureCliCredential(tenant_id=tenant_id) if tenant_id else AzureCliCredential()
+
+    def get_token(self, *scopes: str, **kwargs: Any) -> AccessToken:
+        """Get token, automatically logging in if no session exists or has expired."""
+        try:
+            return self._credential.get_token(*scopes, **kwargs)
+        except Exception as e:
+            err_msg = str(e)
+            # Detect if login is required or session has expired
+            if (
+                "az login" in err_msg
+                or "expired" in err_msg.lower()
+                or "interaction" in err_msg.lower()
+                or "please run" in err_msg.lower()
+            ):
+                logger.info("az_login_required", reason=err_msg)
+                print("\n" + "=" * 60)
+                print("[INFO] Azure CLI login required or session expired.")
+                print("       Starting automatic 'az login' process...")
+                print("=" * 60 + "\n")
+
+                # Verify if az is installed
+                try:
+                    subprocess.run(["az", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                except Exception:
+                    raise RuntimeError(
+                        "Azure CLI (az) is not installed on this machine.\n"
+                        "Please download and install it from: https://aka.ms/InstallAzureCli"
+                    )
+
+                cmd = ["az", "login"]
+                if self.tenant_id:
+                    cmd.extend(["--tenant", self.tenant_id])
+
+                try:
+                    # Run az login interactively (opens browser)
+                    subprocess.run(cmd, check=True)
+                    # Recreate credential with the active session
+                    self._credential = AzureCliCredential(tenant_id=self.tenant_id) if self.tenant_id else AzureCliCredential()
+                    # Retry token acquisition
+                    return self._credential.get_token(*scopes, **kwargs)
+                except subprocess.CalledProcessError as login_err:
+                    raise RuntimeError(f"Interactive 'az login' failed: {login_err}") from login_err
+            else:
+                raise e
+
+
 def get_credential(settings: EAIPSettings) -> TokenCredential:
     """Create an Azure credential based on settings.
 
     Authentication priority:
     1. If client_secret is set → ClientSecretCredential (service principal)
     2. If client_id is set → InteractiveBrowserCredential (custom app reg)
-    3. Default → DefaultAzureCredential (az login / managed identity / etc.)
+    3. Default → AutoLoginAzureCliCredential (az login session)
 
     Args:
         settings: Application settings.
@@ -60,11 +112,9 @@ def get_credential(settings: EAIPSettings) -> TokenCredential:
             client_id=settings.client_id,
         )
 
-    # Mode 3: No app registration — use Azure CLI credential (az login session)
-    logger.info("auth_mode", mode="azure_cli (az login)")
-    if settings.tenant_id:
-        return AzureCliCredential(tenant_id=settings.tenant_id)
-    return AzureCliCredential()
+    # Mode 3: No app registration — use Azure CLI credential with auto login fallback
+    logger.info("auth_mode", mode="azure_cli (az login) with auto-login fallback")
+    return AutoLoginAzureCliCredential(tenant_id=settings.tenant_id or None)
 
 
 def get_msal_client_id(settings: EAIPSettings) -> str:
