@@ -659,8 +659,37 @@ examples:
         help="Snapshot ID for --etl-only mode",
     )
 
+    # Feature overrides
+    parser.add_argument(
+        "--sharepoint", action="store_true", default=None,
+        help="Explicitly enable SharePoint site permission extraction",
+    )
+    parser.add_argument(
+        "--no-sharepoint", action="store_true",
+        help="Explicitly disable SharePoint site permission extraction",
+    )
+    parser.add_argument(
+        "--teams", action="store_true", default=None,
+        help="Explicitly enable Microsoft Teams membership extraction",
+    )
+    parser.add_argument(
+        "--no-teams", action="store_true",
+        help="Explicitly disable Microsoft Teams membership extraction",
+    )
+
     args = parser.parse_args()
     pipeline = Pipeline()
+
+    # Apply overrides from CLI arguments to settings
+    if args.sharepoint is not None:
+        pipeline.settings.extract_sharepoint = True
+    if args.no_sharepoint:
+        pipeline.settings.extract_sharepoint = False
+
+    if args.teams is not None:
+        pipeline.settings.extract_teams = True
+    if args.no_teams:
+        pipeline.settings.extract_teams = False
 
     if args.full:
         result = asyncio.run(pipeline.run_full())
