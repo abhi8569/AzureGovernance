@@ -32,13 +32,22 @@ source "$VENV_DIR/bin/activate"
 pip install --upgrade pip --quiet
 pip install -r requirements.txt --quiet
 
-# 4. Copy .env if needed
+# 4. Copy / Update .env if needed
 if [ ! -f ".env" ]; then
     echo "[4/4] Creating .env from template..."
     cp .env.example .env
-    echo "  → Edit .env with your EAIP_TENANT_ID and EAIP_CLIENT_ID"
+    echo "  → Created .env. Please edit it with your EAIP_TENANT_ID."
 else
-    echo "[4/4] .env already exists — skipping"
+    echo "[4/4] .env already exists — checking for missing settings..."
+    if ! grep -q "EAIP_EXTRACT_SHAREPOINT" .env; then
+        echo "" >> .env
+        echo "# --- Feature Flags added by setup update ---" >> .env
+        echo "EAIP_EXTRACT_SHAREPOINT=false" >> .env
+        echo "EAIP_EXTRACT_TEAMS=false" >> .env
+        echo "  → Appended new SharePoint and Teams feature flags to .env"
+    else
+        echo "  → All settings up to date."
+    fi
 fi
 
 echo ""
@@ -46,7 +55,6 @@ echo "====================================="
 echo " Setup complete!"
 echo "====================================="
 echo ""
-echo " Activate the venv:   source .venv/bin/activate"
-echo " Run tests:           python -m pytest tests/ -v"
-echo " Run scan:            python -m src.orchestrator.pipeline --scan-subscription --subscription-ids YOUR-SUB-ID"
+echo " Run tests:           ./run.sh --help (or tests using pytest)"
+echo " Run scan:            ./run.sh --scan-subscription --subscription-ids YOUR-SUB-ID"
 echo ""

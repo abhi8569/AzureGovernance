@@ -34,13 +34,23 @@ call %VENV_DIR%\Scripts\activate.bat
 python -m pip install --upgrade pip --quiet
 pip install -r requirements.txt --quiet
 
-REM 4. Copy .env
+REM 4. Copy / Update .env
 if not exist ".env" (
     echo [4/4] Creating .env from template...
     copy .env.example .env >nul
-    echo   -^> Edit .env with your EAIP_TENANT_ID and EAIP_CLIENT_ID
+    echo   -^> Created .env. Please edit it with your EAIP_TENANT_ID.
 ) else (
-    echo [4/4] .env already exists - skipping
+    echo [4/4] .env already exists - checking for missing settings...
+    findstr /I "EAIP_EXTRACT_SHAREPOINT" .env >nul
+    if errorlevel 1 (
+        echo.>> .env
+        echo # --- Feature Flags added by setup update --->> .env
+        echo EAIP_EXTRACT_SHAREPOINT=false>> .env
+        echo EAIP_EXTRACT_TEAMS=false>> .env
+        echo   -^> Appended new SharePoint and Teams feature flags to .env
+    ) else (
+        echo   -^> All settings up to date.
+    )
 )
 
 echo.
