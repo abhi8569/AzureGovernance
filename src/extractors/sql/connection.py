@@ -146,7 +146,6 @@ class SQLConnection:
             f"DATABASE={database};"
             f"Encrypt=yes;"
             f"TrustServerCertificate=no;"
-            f"Connection Timeout={timeout};"
         )
 
         if access_token:
