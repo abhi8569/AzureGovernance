@@ -39,13 +39,23 @@ if [ ! -f ".env" ]; then
     echo "  → Created .env. Please edit it with your EAIP_TENANT_ID."
 else
     echo "[4/4] .env already exists — checking for missing settings..."
+    UPDATED=0
     if ! grep -q "EAIP_EXTRACT_SHAREPOINT" .env; then
         echo "" >> .env
         echo "# --- Feature Flags added by setup update ---" >> .env
         echo "EAIP_EXTRACT_SHAREPOINT=false" >> .env
         echo "EAIP_EXTRACT_TEAMS=false" >> .env
         echo "  → Appended new SharePoint and Teams feature flags to .env"
-    else
+        UPDATED=1
+    fi
+    if ! grep -q "EAIP_RESOURCE_GROUPS" .env; then
+        echo "" >> .env
+        echo "# --- Resource Group Scoping added by setup update ---" >> .env
+        echo "EAIP_RESOURCE_GROUPS=[]" >> .env
+        echo "  → Appended new EAIP_RESOURCE_GROUPS setting to .env"
+        UPDATED=1
+    fi
+    if [ "$UPDATED" -eq 0 ]; then
         echo "  → All settings up to date."
     fi
 fi

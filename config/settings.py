@@ -138,6 +138,10 @@ class EAIPSettings(BaseSettings):
             "Used by --scan-subscription mode. Can also be passed via CLI."
         ),
     )
+    resource_groups: list[str] = Field(
+        default_factory=list,
+        description="Optional list of resource groups to restrict the scan to.",
+    )
 
     model_config = {
         "env_prefix": "EAIP_",

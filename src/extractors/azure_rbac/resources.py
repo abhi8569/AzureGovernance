@@ -42,11 +42,13 @@ class ResourceGraphExtractor:
         tenant_id: str,
         snapshot_id: int,
         subscription_ids: list[str],
+        resource_groups: list[str] | None = None,
     ) -> None:
         self.credential = credential
         self.tenant_id = tenant_id
         self.snapshot_id = snapshot_id
         self.subscription_ids = subscription_ids
+        self.resource_groups = resource_groups
         self.logger = structlog.get_logger(self.__class__.__name__)
 
     def extract(self) -> ExtractResult:
@@ -66,6 +68,17 @@ class ResourceGraphExtractor:
         records: list[dict[str, Any]] = []
         errors: list[str] = []
 
+        # Build dynamic query
+        query_parts = ["Resources"]
+        if self.resource_groups:
+            rg_list = ", ".join(f"'{rg}'" for rg in self.resource_groups)
+            query_parts.append(f"where resourceGroup in~ ({rg_list})")
+        query_parts.append(
+            "project id, name, type, location, resourceGroup, subscriptionId, tags, properties, identity, sku, kind"
+        )
+        query_parts.append("order by id asc")
+        query_str = " | ".join(query_parts)
+
         try:
             client = ResourceGraphClient(self.credential)
             skip_token: str | None = None
@@ -78,7 +91,7 @@ class ResourceGraphExtractor:
                 )
                 request = QueryRequest(
                     subscriptions=self.subscription_ids,
-                    query=ARG_QUERY.strip(),
+                    query=query_str,
                     options=options,
                 )
 

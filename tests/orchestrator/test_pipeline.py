@@ -145,3 +145,59 @@ def test_pipeline_load_to_database(db_session: Session, test_settings: EAIPSetti
     assert len(assignments) == 1
     assert assignments[0].principal_id == u_key
     assert assignments[0].snapshot_id == snapshot_id
+
+
+def test_pipeline_resource_group_filtering(test_settings: EAIPSettings) -> None:
+    """Test that _filter_records_by_rg correctly drops records from other resource groups."""
+    pipeline = Pipeline(test_settings)
+    pipeline.settings.resource_groups = ["rg-allowed"]
+
+    records = [
+        # Flat dict with resource_group field (allowed)
+        {"resource_group": "rg-allowed", "name": "res-1"},
+        # Flat dict with resource_group field (disallowed)
+        {"resource_group": "rg-disallowed", "name": "res-2"},
+        # Flat dict with Azure ID containing resource group (allowed)
+        {"resource_guid": "/subscriptions/sub/resourceGroups/rg-allowed/providers/Microsoft.KeyVault/vaults/kv-1"},
+        # Flat dict with Azure ID containing resource group (disallowed)
+        {"resource_guid": "/subscriptions/sub/resourceGroups/rg-disallowed/providers/Microsoft.KeyVault/vaults/kv-2"},
+        # Tenant level object with no RG (should be kept)
+        {"object_id": "user-123"},
+        # Nested list structure (e.g. storage / keyvault return shape)
+        {
+            "resources": [
+                {"resource_group": "rg-allowed", "name": "res-nested-allowed"},
+                {"resource_group": "rg-disallowed", "name": "res-nested-disallowed"}
+            ],
+            "assignments": [
+                {"scope": "/subscriptions/sub/resourceGroups/rg-allowed/providers/kv-1", "role": "Reader"},
+                {"scope": "/subscriptions/sub/resourceGroups/rg-disallowed/providers/kv-2", "role": "Reader"}
+            ]
+        }
+    ]
+
+    filtered = pipeline._filter_records_by_rg(records)
+
+    # We expect:
+    # 1. {"resource_group": "rg-allowed", "name": "res-1"} -> KEP
+    # 2. {"resource_group": "rg-disallowed", "name": "res-2"} -> DROP
+    # 3. {"resource_guid": ".../rg-allowed/..."} -> KEP
+    # 4. {"resource_guid": ".../rg-disallowed/..."} -> DROP
+    # 5. {"object_id": "user-123"} -> KEP
+    # 6. Nested dict -> kept, but sub-lists inside are filtered!
+    
+    assert len(filtered) == 4
+    
+    # Check flat items
+    assert filtered[0]["name"] == "res-1"
+    assert "rg-allowed" in filtered[1]["resource_guid"]
+    assert filtered[2]["object_id"] == "user-123"
+    
+    # Check nested item
+    nested = filtered[3]
+    assert len(nested["resources"]) == 1
+    assert nested["resources"][0]["name"] == "res-nested-allowed"
+    
+    assert len(nested["assignments"]) == 1
+    assert "rg-allowed" in nested["assignments"][0]["scope"]
+

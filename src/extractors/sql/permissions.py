@@ -436,6 +436,7 @@ class SQLServerExtractor:
         credential: TokenCredential,
         subscription_id: str,
         access_token: str | None = None,
+        resource_groups: list[str] | None = None,
     ) -> ExtractResult:
         """Auto-discover SQL servers in a subscription and deep-extract all.
 
@@ -448,6 +449,7 @@ class SQLServerExtractor:
             credential: Azure SDK credential.
             subscription_id: Azure subscription GUID.
             access_token: Azure AD token for SQL data-plane access.
+            resource_groups: Optional list of resource group names to restrict the scan scope to.
 
         Returns:
             Combined ExtractResult from ARM + deep extraction.
@@ -468,6 +470,9 @@ class SQLServerExtractor:
                 server_fqdn = server.fully_qualified_domain_name or f"{server.name}.database.windows.net"
                 server_resource_id = generate_surrogate_key("sql", server_id)
                 rg_name = self._extract_rg(server_id)
+
+                if resource_groups and rg_name.lower() not in [r.lower() for r in resource_groups]:
+                    continue
 
                 self.logger.info(
                     "sql_server_discovered",

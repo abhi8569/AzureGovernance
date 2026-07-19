@@ -112,20 +112,77 @@ class SubscriptionScanner:
         self.tenant_id = tenant_id
         self.snapshot_id = snapshot_id
         self.settings = settings
+        self.resource_groups = getattr(settings, "resource_groups", [])
+
+    def _is_rg_allowed(self, value: str | dict[str, Any]) -> bool:
+        if not self.resource_groups:
+            return True
+
+        if isinstance(value, str):
+            val_str = value
+        elif isinstance(value, dict):
+            rg = value.get("resource_group") or value.get("resourceGroup")
+            if rg:
+                return rg.lower() in [r.lower() for r in self.resource_groups]
+            val_str = ""
+            for key in ["resource_guid", "resource_id", "id", "scope", "resourceGroup"]:
+                if key in value and isinstance(value[key], str):
+                    val_str = value[key]
+                    break
+        else:
+            return True
+
+        if "/resourceGroups/" in val_str:
+            parts = val_str.split("/")
+            try:
+                rg_idx = parts.index("resourceGroups")
+                rg_name = parts[rg_idx + 1]
+                return rg_name.lower() in [r.lower() for r in self.resource_groups]
+            except (ValueError, IndexError):
+                pass
+
+        return True
+
+    def _filter_records_by_rg(self, records: list[Any]) -> list[Any]:
+        if not self.resource_groups:
+            return records
+
+        filtered = []
+        for rec in records:
+            if isinstance(rec, dict):
+                new_rec = {}
+                is_resource_list_holder = False
+                for k, v in rec.items():
+                    if isinstance(v, list) and k in ["resources", "assignments", "role_assignments", "permission_assignments", "rls_policies", "ddm_rules", "firewall_rules", "databases"]:
+                        is_resource_list_holder = True
+                        new_rec[k] = self._filter_records_by_rg(v)
+                    else:
+                        new_rec[k] = v
+                if is_resource_list_holder:
+                    filtered.append(new_rec)
+                elif self._is_rg_allowed(rec):
+                    filtered.append(rec)
+            else:
+                filtered.append(rec)
+        return filtered
 
     def _add_result(self, results: dict[str, Any], name: str, result: Any) -> None:
+        raw_records = getattr(result, "records", [])
+        filtered_records = self._filter_records_by_rg(raw_records)
         results[name] = {
-            "records": getattr(result, "records", []),
-            "count": getattr(result, "record_count", 0),
+            "records": filtered_records,
+            "count": len(filtered_records),
             "errors": getattr(result, "errors", []),
             "duration": getattr(result, "duration_seconds", 0.0),
         }
 
     def _append_result(self, results: dict[str, Any], name: str, result: Any) -> None:
+        raw_records = getattr(result, "records", [])
+        filtered_records = self._filter_records_by_rg(raw_records)
         results.setdefault(name, {"count": 0, "errors": [], "records": []})
-        results[name]["count"] += getattr(result, "record_count", 0)
+        results[name]["count"] += len(filtered_records)
         results[name]["errors"].extend(getattr(result, "errors", []))
-        results[name]["records"].extend(getattr(result, "records", []))
+        results[name]["records"].extend(filtered_records)
 
     async def scan(self, subscription_ids: list[str]) -> dict[str, Any]:
         """Scan subscriptions — discover resources and extract permissions.
@@ -228,9 +285,17 @@ class SubscriptionScanner:
 
             client = ResourceGraphClient(self.credential)
 
+            discover_query_parts = ["Resources"]
+            if self.resource_groups:
+                rg_list = ", ".join(f"'{rg}'" for rg in self.resource_groups)
+                discover_query_parts.append(f"where resourceGroup in~ ({rg_list})")
+            discover_query_parts.append("summarize count() by type")
+            discover_query_parts.append("order by count_ desc")
+            discover_query = " | ".join(discover_query_parts)
+
             query = QueryRequest(
                 subscriptions=subscription_ids,
-                query="Resources | summarize count() by type | order by count_ desc",
+                query=discover_query,
                 options=QueryRequestOptions(result_format=ResultFormat.OBJECT_ARRAY),
             )
 
@@ -244,7 +309,8 @@ class SubscriptionScanner:
             # Also run full resource extraction
             from src.extractors.azure_rbac.resources import ResourceGraphExtractor
             rg_ext = ResourceGraphExtractor(
-                self.credential, self.tenant_id, self.snapshot_id, subscription_ids
+                self.credential, self.tenant_id, self.snapshot_id, subscription_ids,
+                resource_groups=self.resource_groups
             )
             rg_result = rg_ext.extract()
             self._add_result(results, "resource_graph", rg_result)
@@ -302,6 +368,7 @@ class SubscriptionScanner:
                         credential=self.credential,
                         subscription_id=sub_id,
                         access_token=sql_token,
+                        resource_groups=self.resource_groups,
                     )
                     self._append_result(results, "sql_deep", sql_result)
 
