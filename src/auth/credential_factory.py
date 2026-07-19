@@ -70,19 +70,21 @@ class AutoLoginAzureCliCredential:
                 except Exception:
                     pass
 
-                cmd = ["az", "login"]
+                # Use device code flow to force login via standard web browser
+                # and bypass Windows WAM (which prompts for Windows Hello/Device Management)
+                cmd = ["az", "login", "--use-device-code"]
                 if self.tenant_id:
                     cmd.extend(["--tenant", self.tenant_id])
 
                 try:
-                    # Run az login interactively (opens browser)
+                    # Run az login with device code (opens browser login page)
                     subprocess.run(cmd, shell=True, check=True)
                     # Recreate credential with the active session
                     self._credential = AzureCliCredential(tenant_id=self.tenant_id) if self.tenant_id else AzureCliCredential()
                     # Retry token acquisition
                     return self._credential.get_token(*scopes, **kwargs)
                 except subprocess.CalledProcessError as login_err:
-                    raise RuntimeError(f"Interactive 'az login' failed: {login_err}") from login_err
+                    raise RuntimeError(f"Interactive device-code 'az login' failed: {login_err}") from login_err
             else:
                 raise e
 
